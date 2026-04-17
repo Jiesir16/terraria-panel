@@ -9,11 +9,20 @@
       ref="uploadRef"
       action="/api/saves/upload"
       :headers="uploadHeaders"
-      list-type="text"
-      accept=".wld"
-      @finish="handleFinish"
-      @error="handleError"
-    />
+      :max="1"
+      :auto-upload="false"
+      accept=".wld,.wld.bak,.bak"
+      :on-finish="handleFinish"
+      :on-error="handleError"
+    >
+      <n-upload-dragger>
+        <div class="upload-dragger-content">
+          <p class="upload-icon">📁</p>
+          <p class="upload-text">点击或拖拽存档文件到此处</p>
+          <p class="upload-hint">支持 .wld、.wld.bak 和 .bak 存档文件</p>
+        </div>
+      </n-upload-dragger>
+    </n-upload>
 
     <template #action>
       <n-button @click="handleCancel">取消</n-button>
@@ -26,7 +35,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { NModal, NUpload, NButton } from 'naive-ui'
+import { NModal, NUpload, NUploadDragger, NButton } from 'naive-ui'
 import { useAuthStore } from '../../stores/auth'
 import { useNotification } from '../../composables/useNotification'
 
@@ -83,5 +92,30 @@ function handleCancel() {
 <style scoped>
 :deep(.n-upload) {
   width: 100%;
+}
+
+.upload-dragger-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 20px 0;
+}
+
+.upload-icon {
+  font-size: 36px;
+  margin: 0;
+}
+
+.upload-text {
+  color: var(--text-primary);
+  font-size: 14px;
+  margin: 0;
+}
+
+.upload-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin: 0;
 }
 </style>

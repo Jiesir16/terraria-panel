@@ -1,11 +1,13 @@
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionInfo {
     pub version: String,
     pub tag_name: String,
+    pub name: String,
     pub download_url: String,
     pub published_at: String,
     pub size: u64,
@@ -15,15 +17,16 @@ pub struct VersionInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalVersion {
     pub version: String,
+    pub name: String,
     pub path: String,
     pub size: u64,
     pub is_dotnet: bool,
+    pub installed_at: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
     tag_name: String,
-    #[allow(dead_code)]
     name: Option<String>,
     published_at: String,
     assets: Vec<GitHubAsset>,
@@ -36,17 +39,36 @@ struct GitHubAsset {
     size: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvailableVersionsResponse {
+    pub versions: Vec<VersionInfo>,
+    pub total: usize,
+    pub page: usize,
+    pub per_page: usize,
+    pub has_more: bool,
+}
+
 pub struct VersionManager {
     versions_dir: PathBuf,
-    github_mirror: String,
+    github_mirror: RwLock<String>,
 }
 
 impl VersionManager {
     pub fn new(versions_dir: PathBuf, github_mirror: String) -> Self {
         Self {
             versions_dir,
-            github_mirror,
+            github_mirror: RwLock::new(github_mirror),
         }
+    }
+
+    pub async fn get_github_mirror(&self) -> String {
+        self.github_mirror.read().await.clone()
+    }
+
+    pub async fn set_github_mirror(&self, mirror: String) {
+        let mut m = self.github_mirror.write().await;
+        *m = mirror;
+        tracing::info!("GitHub mirror updated");
     }
 
     pub fn list_local(&self) -> Result<Vec<LocalVersion>, AppError> {
@@ -70,36 +92,75 @@ impl VersionManager {
                         .unwrap_or(0);
                     let is_dotnet = self.is_dotnet_version(&path);
 
+                    // Get directory creation time as installed_at
+                    let installed_at = std::fs::metadata(&path)
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .map(|t| {
+                            let datetime: chrono::DateTime<chrono::Utc> = t.into();
+                            datetime.format("%Y-%m-%d %H:%M").to_string()
+                        })
+                        .unwrap_or_default();
+
+                    // Generate a display name from the tag
+                    let name = format!("TShock {}", dir_name_str.trim_start_matches('v'));
+
                     versions.push(LocalVersion {
                         version: dir_name_str,
+                        name,
                         path: path.to_string_lossy().to_string(),
                         size,
                         is_dotnet,
+                        installed_at,
                     });
                 }
             }
         }
 
+        // Sort by version descending
+        versions.sort_by(|a, b| b.version.cmp(&a.version));
+
         Ok(versions)
     }
 
-    pub async fn fetch_available(&self) -> Result<Vec<VersionInfo>, AppError> {
-        let api_url = "https://api.github.com/repos/Pryaxis/TShock/releases";
+    pub async fn fetch_available(&self, page: usize, per_page: usize) -> Result<AvailableVersionsResponse, AppError> {
+        let github_mirror = self.github_mirror.read().await.clone();
+
+        // GitHub API supports per_page (max 100) and page params
+        let api_per_page = 100; // Fetch more from GitHub, paginate locally
+        let api_url = format!(
+            "https://api.github.com/repos/Pryaxis/TShock/releases?per_page={}&page=1",
+            api_per_page
+        );
 
         tracing::info!(url = %api_url, "Fetching TShock releases from GitHub API");
 
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| AppError::ProcessError(format!("Failed to create HTTP client: {}", e)))?;
+
         let response = client
-            .get(api_url)
+            .get(&api_url)
             .header("User-Agent", "terraria-console")
             .send()
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, "HTTP request to GitHub API failed");
-                AppError::ProcessError(format!("Failed to fetch releases: {}", e))
+                AppError::ProcessError(format!("无法连接 GitHub API，请检查网络或配置代理: {}", e))
             })?;
 
         tracing::debug!(status = %response.status(), "GitHub API response received");
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            tracing::error!(status = %status, body = %body, "GitHub API returned error");
+            return Err(AppError::ProcessError(format!(
+                "GitHub API 返回错误 ({}): {}",
+                status, body
+            )));
+        }
 
         let releases: Vec<GitHubRelease> = response
             .json()
@@ -115,29 +176,75 @@ impl VersionManager {
         let local_version_set: std::collections::HashSet<String> =
             local_versions.iter().map(|v| v.version.clone()).collect();
 
-        let mut versions = Vec::new();
+        let mut all_versions = Vec::new();
         for release in releases {
-            for asset in release.assets.iter() {
-                if asset.name.ends_with(".zip") {
-                    let mut download_url = asset.browser_download_url.clone();
+            // Find the Linux zip asset (prefer linux, fallback to any zip)
+            let zip_asset = release.assets.iter().find(|a| {
+                a.name.ends_with(".zip")
+            });
 
-                    if !self.github_mirror.is_empty() {
-                        download_url = download_url.replace("https://github.com", &self.github_mirror);
-                    }
+            if let Some(asset) = zip_asset {
+                let mut download_url = asset.browser_download_url.clone();
 
-                    versions.push(VersionInfo {
-                        version: release.tag_name.clone(),
-                        tag_name: release.tag_name.clone(),
-                        download_url,
-                        published_at: release.published_at.clone(),
-                        size: asset.size,
-                        downloaded: local_version_set.contains(&release.tag_name),
-                    });
+                if !github_mirror.is_empty() {
+                    download_url = Self::apply_mirror(&download_url, &github_mirror);
                 }
+
+                // Build a readable display name
+                let display_name = release
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("TShock {}", release.tag_name.trim_start_matches('v')));
+
+                all_versions.push(VersionInfo {
+                    version: release.tag_name.clone(),
+                    tag_name: release.tag_name.clone(),
+                    name: display_name,
+                    download_url,
+                    published_at: release.published_at.clone(),
+                    size: asset.size,
+                    downloaded: local_version_set.contains(&release.tag_name),
+                });
             }
         }
 
-        Ok(versions)
+        let total = all_versions.len();
+        let start = (page - 1) * per_page;
+        let has_more = start + per_page < total;
+
+        let versions = if start < total {
+            all_versions[start..std::cmp::min(start + per_page, total)].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        Ok(AvailableVersionsResponse {
+            versions,
+            total,
+            page,
+            per_page,
+            has_more,
+        })
+    }
+
+    /// Apply a mirror/proxy prefix to a GitHub download URL.
+    /// Supports common mirror patterns:
+    /// - `https://ghproxy.com/` style: prepend to the full URL
+    /// - `https://mirror.example.com` style: replace `https://github.com`
+    fn apply_mirror(url: &str, mirror: &str) -> String {
+        let mirror = mirror.trim().trim_end_matches('/');
+        if mirror.is_empty() {
+            return url.to_string();
+        }
+
+        // If mirror looks like a full proxy (e.g. ghproxy.com, gh-proxy.com),
+        // prepend it to the URL
+        if mirror.contains("ghproxy") || mirror.contains("gh-proxy") || mirror.contains("mirror.ghproxy") {
+            format!("{}/{}", mirror, url)
+        } else {
+            // Otherwise replace the github.com domain
+            url.replace("https://github.com", mirror)
+        }
     }
 
     pub async fn download_version(
@@ -152,20 +259,34 @@ impl VersionManager {
             return Ok(version_dir);
         }
 
-        tracing::info!(version = %tag_name, url = %download_url, "Starting version download");
+        // Apply mirror to the download URL if configured
+        let github_mirror = self.github_mirror.read().await.clone();
+        let actual_url = if !github_mirror.is_empty() {
+            Self::apply_mirror(download_url, &github_mirror)
+        } else {
+            download_url.to_string()
+        };
+
+        tracing::info!(version = %tag_name, url = %actual_url, "Starting version download");
 
         std::fs::create_dir_all(&version_dir)
             .map_err(|e| AppError::FileError(format!("Failed to create version directory: {}", e)))?;
 
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .map_err(|e| AppError::ProcessError(format!("Failed to create HTTP client: {}", e)))?;
+
         let response = client
-            .get(download_url)
+            .get(&actual_url)
             .header("User-Agent", "terraria-console")
             .send()
             .await
             .map_err(|e| {
+                // Clean up empty dir on failure
+                let _ = std::fs::remove_dir_all(&version_dir);
                 tracing::error!(version = %tag_name, error = %e, "Download HTTP request failed");
-                AppError::ProcessError(format!("Failed to download: {}", e))
+                AppError::ProcessError(format!("下载失败，请检查网络或代理设置: {}", e))
             })?;
 
         tracing::debug!(version = %tag_name, status = %response.status(), "Download response received");
@@ -291,6 +412,9 @@ impl VersionManager {
 
 impl Default for VersionManager {
     fn default() -> Self {
-        Self::new(PathBuf::from("./data/versions"), String::new())
+        Self {
+            versions_dir: PathBuf::from("./data/versions"),
+            github_mirror: RwLock::new(String::new()),
+        }
     }
 }

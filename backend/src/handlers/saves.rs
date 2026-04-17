@@ -1,12 +1,11 @@
 use axum::{
     extract::{Multipart, Path, State},
-    http::StatusCode,
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use uuid::Uuid;
 use chrono::Utc;
 use rusqlite::params;
 
@@ -15,6 +14,10 @@ use crate::{
     error::AppError,
     handlers::AppState,
 };
+
+fn is_allowed_save_name(name: &str) -> bool {
+    name.ends_with(".wld") || name.ends_with(".wld.bak") || name.ends_with(".bak")
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SaveInfo {
@@ -82,11 +85,10 @@ pub async fn upload_save(
             .ok_or_else(|| AppError::BadRequest("Missing filename".to_string()))?
             .to_string();
 
-        // Only allow .wld files
-        if !filename.ends_with(".wld") {
+        if !is_allowed_save_name(&filename) {
             tracing::warn!(filename = %filename, "Save upload rejected: invalid file extension");
             return Err(AppError::BadRequest(
-                "Only .wld files are allowed".to_string(),
+                "Only .wld, .wld.bak and .bak files are allowed".to_string(),
             ));
         }
 
@@ -104,45 +106,57 @@ pub async fn upload_save(
             ));
         }
 
-        let save_id = Uuid::new_v4().to_string();
-        let file_size = data.len() as u64;
-
-        tracing::info!(filename = %filename, size = file_size, save_id = %save_id, "Writing save file");
-
-        state
+        let saved = state
             .save_manager
             .upload_save(&filename, &data)
             .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+
+        let created_at = Utc::now().to_rfc3339();
+        let save = SaveInfo {
+            id: saved.id,
+            name: saved.name,
+            file_path: saved.file_path,
+            file_size: saved.file_size,
+            source_server_id: None,
+            created_at: created_at.clone(),
+        };
+
+        tracing::info!(
+            filename = %save.name,
+            size = save.file_size,
+            save_id = %save.id,
+            file_path = %save.file_path,
+            "Writing save file"
+        );
 
         // Record in database
         let db = state.db.lock().map_err(|_| {
             AppError::InternalServerError("Failed to acquire database lock".to_string())
         })?;
 
-        let now = Utc::now().to_rfc3339();
-        let file_path = state
-            .config
-            .server
-            .data_dir
-            .join("saves")
-            .join(&filename)
-            .to_string_lossy()
-            .to_string();
-
         db.execute(
             "INSERT INTO saves (id, name, file_path, file_size, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![save_id, filename, file_path, file_size as i64, now],
+            params![
+                save.id,
+                save.name,
+                save.file_path,
+                save.file_size as i64,
+                save.created_at
+            ],
         )
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+        tracing::info!(user = %auth.username, save_id = %save.id, "Save uploaded successfully");
+
+        return Ok(Json(json!({
+            "success": true,
+            "message": "Save uploaded successfully",
+            "save": save
+        })));
     }
 
-    tracing::info!(user = %auth.username, "Save uploaded successfully");
-
-    Ok(Json(json!({
-        "success": true,
-        "message": "Save uploaded successfully"
-    })))
+    Err(AppError::BadRequest("No save file uploaded".to_string()))
 }
 
 pub async fn import_save(
@@ -162,28 +176,47 @@ pub async fn import_save(
         AppError::InternalServerError("Failed to acquire database lock".to_string())
     })?;
 
-    let file_path: String = db
+    let (save_name, file_path): (String, String) = db
         .query_row(
-            "SELECT file_path FROM saves WHERE id = ?1",
+            "SELECT name, file_path FROM saves WHERE id = ?1",
             params![save_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(|_| AppError::NotFound("Save not found".to_string()))?;
 
-    drop(db);
+    tracing::debug!(
+        save_id = %save_id,
+        save_name = %save_name,
+        file_path = %file_path,
+        server_id = %server_id,
+        "Copying save file to server"
+    );
 
-    tracing::debug!(save_id = %save_id, file_path = %file_path, server_id = %server_id, "Copying save file to server");
-
-    state
+    let imported_world_name = state
         .save_manager
-        .import_save(&file_path, &server_id)
+        .import_save(&file_path, &server_id, &save_name)
         .map_err(|e| AppError::InternalServerError(e.to_string()))?;
 
-    tracing::info!(save_id = %save_id, server_id = %server_id, "Save imported successfully");
+    let now = Utc::now().to_rfc3339();
+    db.execute(
+        "UPDATE servers SET world_name = ?1, updated_at = ?2 WHERE id = ?3",
+        params![imported_world_name, now, server_id],
+    )
+    .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+    drop(db);
+
+    tracing::info!(
+        save_id = %save_id,
+        server_id = %server_id,
+        world_name = %save_name,
+        "Save imported successfully"
+    );
 
     Ok(Json(json!({
         "success": true,
-        "message": "Save imported successfully"
+        "message": "Save imported successfully",
+        "world_name": save_name
     })))
 }
 
@@ -198,11 +231,11 @@ pub async fn download_save(
         AppError::InternalServerError("Failed to acquire database lock".to_string())
     })?;
 
-    let file_path: String = db
+    let (save_name, file_path): (String, String) = db
         .query_row(
-            "SELECT file_path FROM saves WHERE id = ?1",
+            "SELECT name, file_path FROM saves WHERE id = ?1",
             params![save_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(|_| AppError::NotFound("Save not found".to_string()))?;
 
@@ -213,17 +246,21 @@ pub async fn download_save(
     let file = std::fs::read(&file_path)
         .map_err(|e| AppError::FileError(e.to_string()))?;
 
-    let _filename = std::path::Path::new(&file_path)
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-
     tracing::info!(save_id = %save_id, size = file.len(), "Save file downloaded");
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    let content_disposition = format!("attachment; filename=\"{}\"", save_name);
+    let content_disposition = HeaderValue::from_str(&content_disposition)
+        .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+    headers.insert(header::CONTENT_DISPOSITION, content_disposition);
 
     Ok((
         StatusCode::OK,
-        [("content-type", "application/octet-stream")],
+        headers,
         file,
     ))
 }
@@ -303,10 +340,28 @@ pub async fn backup_server(
     if let Some(world_name) = world_name {
         tracing::info!(server_id = %server_id, world_name = %world_name, "Creating backup of world");
 
-        state
+        let backup = state
             .save_manager
             .backup_server(&server_id, &world_name)
             .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+
+        let db = state.db.lock().map_err(|_| {
+            AppError::InternalServerError("Failed to acquire database lock".to_string())
+        })?;
+
+        db.execute(
+            "INSERT INTO saves (id, name, file_path, file_size, source_server_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                backup.id,
+                backup.name,
+                backup.file_path,
+                backup.file_size as i64,
+                backup.source_server_id,
+                backup.created_at
+            ],
+        )
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
         tracing::info!(server_id = %server_id, world_name = %world_name, "Server backed up successfully");
 

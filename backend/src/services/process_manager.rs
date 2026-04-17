@@ -35,6 +35,7 @@ impl ProcessManager {
         port: u16,
         max_players: i32,
         password: &Option<String>,
+        world_path: &Option<String>,
     ) -> Result<(), AppError> {
         let mut processes = self.processes.write().await;
 
@@ -77,6 +78,15 @@ impl ProcessManager {
 
         if let Some(pwd) = password {
             cmd.arg("-password").arg(pwd);
+        }
+
+        if let Some(world) = world_path {
+            if std::path::Path::new(world).exists() {
+                tracing::info!(server_id = %server_id, world = %world, "Loading world file");
+                cmd.arg("-world").arg(world);
+            } else {
+                tracing::warn!(server_id = %server_id, world = %world, "World file not found, starting without -world flag");
+            }
         }
 
         let mut child = cmd

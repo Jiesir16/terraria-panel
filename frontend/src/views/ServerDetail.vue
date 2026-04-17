@@ -80,6 +80,7 @@
                   :server-id="serverId"
                   @import="() => handleImportSave(save.id)"
                   @delete="() => handleDeleteSave(save.id)"
+                  @download="() => handleDownloadSave(save)"
                 />
               </div>
             </n-spin>
@@ -205,10 +206,26 @@ async function handleDeleteMod(modName: string) {
 async function handleImportSave(saveId: string) {
   try {
     await savesApi.importToServer(saveId, serverId)
-    notification.success('存档已导入', '')
+    notification.success('存档已导入，并设为启动世界', '')
+    await loadServer()
     loadSaves()
   } catch (error: any) {
     notification.error('导入失败', error?.response?.data?.message || '')
+  }
+}
+
+async function handleDownloadSave(save: { id: string; name: string }) {
+  try {
+    const response = await savesApi.download(save.id)
+    const url = window.URL.createObjectURL(response.data)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = save.name
+    link.click()
+    window.URL.revokeObjectURL(url)
+    notification.success('下载开始', '')
+  } catch (error: any) {
+    notification.error('下载失败', error?.response?.data?.message || '')
   }
 }
 

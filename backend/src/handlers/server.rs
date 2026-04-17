@@ -14,6 +14,50 @@ use crate::{
     handlers::AppState,
 };
 
+fn is_world_file_name(name: &str) -> bool {
+    name.ends_with(".wld") || name.ends_with(".wld.bak") || name.ends_with(".bak")
+}
+
+fn resolve_world_path(world_dir: &std::path::Path, world_name: &str) -> Option<String> {
+    if world_name.is_empty() {
+        return None;
+    }
+
+    let mut candidates = Vec::new();
+    if world_name.ends_with(".wld") || world_name.ends_with(".bak") {
+        candidates.push(world_dir.join(world_name));
+    } else {
+        candidates.push(world_dir.join(format!("{}.wld", world_name)));
+        candidates.push(world_dir.join(format!("{}.wld.bak", world_name)));
+        candidates.push(world_dir.join(format!("{}.bak", world_name)));
+    }
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return Some(candidate.to_string_lossy().to_string());
+        }
+    }
+
+    if let Ok(entries) = std::fs::read_dir(world_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            let Some(fname) = path.file_name().and_then(|f| f.to_str()) else {
+                continue;
+            };
+
+            if is_world_file_name(fname) && fname.starts_with(world_name) {
+                return Some(path.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    None
+}
+
 pub async fn list_servers(
     State(state): State<AppState>,
     _auth: Auth,
@@ -322,14 +366,14 @@ pub async fn start_server(
     }
 
     // Use a block to ensure MutexGuard is dropped before any .await
-    let (port, max_players, password, tshock_version) = {
+    let (port, max_players, password, tshock_version, world_name) = {
         let db = state.db.lock().map_err(|_| {
             AppError::InternalServerError("Failed to acquire database lock".to_string())
         })?;
 
-        let result: (u16, i32, Option<String>, String) = db
+        let result: (u16, i32, Option<String>, String, Option<String>) = db
             .query_row(
-                "SELECT port, max_players, password, tshock_version FROM servers WHERE id = ?1",
+                "SELECT port, max_players, password, tshock_version, world_name FROM servers WHERE id = ?1",
                 params![id],
                 |row| {
                     Ok((
@@ -337,6 +381,7 @@ pub async fn start_server(
                         row.get(1)?,
                         row.get(2)?,
                         row.get(3)?,
+                        row.get(4)?,
                     ))
                 },
             )
@@ -351,6 +396,7 @@ pub async fn start_server(
         max_players = max_players,
         tshock_version = %tshock_version,
         has_password = password.is_some(),
+        world_name = ?world_name,
         "Server config loaded, starting process"
     );
 
@@ -362,18 +408,30 @@ pub async fn start_server(
             AppError::NotFound(format!("TShock version {} not found", tshock_version))
         })?;
 
-    let config_path = state
+    let server_dir = state
         .config
         .server
         .data_dir
         .join("servers")
-        .join(&id)
-        .join("tshock");
+        .join(&id);
+
+    let config_path = server_dir.join("tshock");
+
+    // Resolve world file path
+    let world_dir = server_dir.join("world");
+    let world_path = world_name.and_then(|wn| {
+        let resolved = resolve_world_path(&world_dir, &wn);
+        if resolved.is_none() {
+            tracing::warn!(server_id = %id, world_name = %wn, "World file not found in server directory");
+        }
+        resolved
+    });
 
     tracing::debug!(
         server_id = %id,
         version_path = %version_path.display(),
         config_path = %config_path.display(),
+        world_path = ?world_path,
         "Launching TShock process"
     );
 
@@ -386,6 +444,7 @@ pub async fn start_server(
             port,
             max_players,
             &password,
+            &world_path,
         )
         .await?;
 
@@ -497,4 +556,63 @@ pub async fn server_status(
         "status": status,
         "running": is_running
     })))
+}
+
+/// List .wld world files available in a server's world directory
+pub async fn list_worlds(
+    State(state): State<AppState>,
+    _auth: Auth,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    let world_dir = state
+        .config
+        .server
+        .data_dir
+        .join("servers")
+        .join(&id)
+        .join("world");
+
+    let mut worlds = Vec::new();
+
+    if world_dir.exists() {
+        let entries = std::fs::read_dir(&world_dir)
+            .map_err(|e| AppError::FileError(format!("Failed to read world directory: {}", e)))?;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
+                    if is_world_file_name(fname) {
+                        let metadata = std::fs::metadata(&path).ok();
+                        let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+                        let modified = metadata
+                            .and_then(|m| m.modified().ok())
+                            .map(|t| {
+                                let dt: chrono::DateTime<chrono::Utc> = t.into();
+                                dt.format("%Y-%m-%d %H:%M").to_string()
+                            })
+                            .unwrap_or_default();
+
+                        worlds.push(json!({
+                            "name": fname,
+                            "size": size,
+                            "modified": modified,
+                            "is_backup": fname.ends_with(".bak")
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort: .wld first, then by name
+    worlds.sort_by(|a, b| {
+        let a_bak = a["is_backup"].as_bool().unwrap_or(false);
+        let b_bak = b["is_backup"].as_bool().unwrap_or(false);
+        a_bak.cmp(&b_bak).then_with(|| {
+            a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
+        })
+    });
+
+    Ok(Json(worlds))
 }

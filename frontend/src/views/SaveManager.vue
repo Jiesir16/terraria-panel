@@ -19,7 +19,7 @@
           server-id=""
           @import="() => handleImportSave(save.id, '')"
           @delete="() => handleDeleteSave(save.id)"
-          @download="() => handleDownloadSave(save.id)"
+          @download="() => handleDownloadSave(save)"
         />
       </div>
     </n-spin>
@@ -76,13 +76,13 @@ async function handleDeleteSave(saveId: string) {
   }
 }
 
-async function handleDownloadSave(saveId: string) {
+async function handleDownloadSave(save: { id: string; name: string }) {
   try {
-    const response = await savesApi.download(saveId)
+    const response = await savesApi.download(save.id)
     const url = window.URL.createObjectURL(response.data)
     const link = document.createElement('a')
     link.href = url
-    link.download = `save-${saveId}.wld`
+    link.download = save.name
     link.click()
     window.URL.revokeObjectURL(url)
     notification.success('下载开始', '')

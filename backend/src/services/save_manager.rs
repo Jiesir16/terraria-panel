@@ -19,6 +19,10 @@ pub struct SaveManager {
     servers_dir: PathBuf,
 }
 
+fn is_allowed_save_name(name: &str) -> bool {
+    name.ends_with(".wld") || name.ends_with(".wld.bak") || name.ends_with(".bak")
+}
+
 impl SaveManager {
     pub fn new(saves_dir: PathBuf, servers_dir: PathBuf) -> Self {
         Self {
@@ -28,9 +32,9 @@ impl SaveManager {
     }
 
     pub fn upload_save(&self, name: &str, data: &[u8]) -> Result<SaveInfo, AppError> {
-        if !name.ends_with(".wld") {
+        if !is_allowed_save_name(name) {
             return Err(AppError::BadRequest(
-                "Only .wld files are allowed".to_string(),
+                "Only .wld, .wld.bak and .bak files are allowed".to_string(),
             ));
         }
 
@@ -72,11 +76,18 @@ impl SaveManager {
         &self,
         save_path: &str,
         server_id: &str,
-    ) -> Result<(), AppError> {
+        target_name: &str,
+    ) -> Result<String, AppError> {
         let save_file_path = PathBuf::from(save_path);
 
         if !save_file_path.exists() {
             return Err(AppError::NotFound(format!("Save file not found: {}", save_path)));
+        }
+
+        if !is_allowed_save_name(target_name) {
+            return Err(AppError::BadRequest(
+                "Imported save must be a .wld, .wld.bak or .bak file".to_string(),
+            ));
         }
 
         let world_dir = self
@@ -89,16 +100,11 @@ impl SaveManager {
                 .map_err(|e| AppError::FileError(format!("Failed to create world directory: {}", e)))?;
         }
 
-        if let Some(filename) = save_file_path.file_name() {
-            let dest_path = world_dir.join(filename);
-            std::fs::copy(&save_file_path, &dest_path)
-                .map_err(|e| AppError::FileError(format!("Failed to copy save: {}", e)))?;
-            Ok(())
-        } else {
-            Err(AppError::BadRequest(
-                "Invalid save file path".to_string(),
-            ))
-        }
+        let dest_path = world_dir.join(target_name);
+        std::fs::copy(&save_file_path, &dest_path)
+            .map_err(|e| AppError::FileError(format!("Failed to copy save: {}", e)))?;
+
+        Ok(target_name.to_string())
     }
 
     pub fn backup_server(
@@ -106,11 +112,12 @@ impl SaveManager {
         server_id: &str,
         world_name: &str,
     ) -> Result<SaveInfo, AppError> {
-        let world_file_path = self
-            .servers_dir
-            .join(server_id)
-            .join("world")
-            .join(format!("{}.wld", world_name));
+        let world_dir = self.servers_dir.join(server_id).join("world");
+        let world_file_path = if world_name.ends_with(".wld") || world_name.ends_with(".bak") {
+            world_dir.join(world_name)
+        } else {
+            world_dir.join(format!("{}.wld", world_name))
+        };
 
         if !world_file_path.exists() {
             return Err(AppError::NotFound(format!(
@@ -162,11 +169,15 @@ impl SaveManager {
                 .map_err(|e| AppError::FileError(format!("Failed to read directory entry: {}", e)))?;
             let path = entry.path();
 
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "wld") {
+            if path.is_file() {
                 let filename = path
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
+
+                if !is_allowed_save_name(&filename) {
+                    continue;
+                }
 
                 let metadata = std::fs::metadata(&path)
                     .map_err(|e| AppError::FileError(format!("Failed to get file metadata: {}", e)))?;
@@ -239,7 +250,7 @@ impl SaveManager {
             if path.is_file() {
                 if let Some(filename) = path.file_name() {
                     let filename_str = filename.to_string_lossy();
-                    if filename_str.starts_with(save_id) && filename_str.ends_with(".wld") {
+                    if filename_str.starts_with(save_id) && is_allowed_save_name(&filename_str) {
                         return Some(path);
                     }
                 }

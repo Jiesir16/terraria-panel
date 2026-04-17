@@ -1,9 +1,10 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     Json,
 };
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 
 use crate::{
     auth::Auth,
@@ -15,6 +16,11 @@ use crate::{
 pub struct DownloadVersionRequest {
     pub tag_name: String,
     pub download_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProxyRequest {
+    pub mirror: String,
 }
 
 pub async fn list_versions(
@@ -34,19 +40,34 @@ pub async fn list_versions(
 pub async fn available_versions(
     State(state): State<AppState>,
     _auth: Auth,
-) -> Result<Json<Vec<crate::services::version_manager::VersionInfo>>, AppError> {
-    tracing::info!("Fetching available TShock versions from GitHub");
-    let versions = state
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<crate::services::version_manager::AvailableVersionsResponse>, AppError> {
+    let page: usize = params
+        .get("page")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1)
+        .max(1);
+
+    let per_page: usize = params
+        .get("per_page")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10)
+        .min(50)
+        .max(1);
+
+    tracing::info!(page = page, per_page = per_page, "Fetching available TShock versions from GitHub");
+
+    let result = state
         .version_manager
-        .fetch_available()
+        .fetch_available(page, per_page)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to fetch available versions from GitHub");
             AppError::InternalServerError(e.to_string())
         })?;
 
-    tracing::info!(count = versions.len(), "Fetched available versions");
-    Ok(Json(versions))
+    tracing::info!(total = result.total, page = result.page, "Fetched available versions");
+    Ok(Json(result))
 }
 
 pub async fn download_version(
@@ -106,5 +127,40 @@ pub async fn delete_version(
     Ok(Json(json!({
         "success": true,
         "message": "Version deleted successfully"
+    })))
+}
+
+/// Get current GitHub proxy/mirror setting
+pub async fn get_proxy(
+    State(state): State<AppState>,
+    _auth: Auth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let mirror = state.version_manager.get_github_mirror().await;
+    Ok(Json(json!({
+        "mirror": mirror
+    })))
+}
+
+/// Set GitHub proxy/mirror URL
+pub async fn set_proxy(
+    State(state): State<AppState>,
+    auth: Auth,
+    Json(req): Json<ProxyRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !auth.is_operator_or_admin() {
+        return Err(AppError::Forbidden(
+            "Only operators and admins can change proxy settings".to_string(),
+        ));
+    }
+
+    let mirror = req.mirror.trim().to_string();
+    tracing::info!(user = %auth.username, mirror = %mirror, "Updating GitHub mirror/proxy");
+
+    state.version_manager.set_github_mirror(mirror.clone()).await;
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "Proxy settings updated",
+        "mirror": mirror
     })))
 }

@@ -8,6 +8,7 @@ mod services;
 mod websocket;
 
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{delete, get, post, put},
     Extension, Router,
 };
@@ -96,11 +97,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/servers/:id/restart", post(handlers::server::restart_server))
         .route("/api/servers/:id/command", post(handlers::server::send_command))
         .route("/api/servers/:id/status", get(handlers::server::server_status))
+        .route("/api/servers/:id/worlds", get(handlers::server::list_worlds))
         .route("/api/servers/:id/console", get(handlers::console::ws_console))
         // Version endpoints
         .route("/api/versions", get(handlers::version::list_versions))
         .route("/api/versions/available", get(handlers::version::available_versions))
         .route("/api/versions/download", post(handlers::version::download_version))
+        .route("/api/versions/proxy", get(handlers::version::get_proxy).put(handlers::version::set_proxy))
         .route("/api/versions/:version", delete(handlers::version::delete_version))
         // Mod endpoints
         .route(
@@ -152,6 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .layer(Extension(token_manager))
         .layer(CorsLayer::permissive())
+        .layer(DefaultBodyLimit::max(512 * 1024 * 1024)) // 512MB for save/mod uploads
         .with_state(state);
 
     // Bind and serve
