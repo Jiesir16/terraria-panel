@@ -1,0 +1,26 @@
+{
+  "name": "terraria-console-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vue": "^3.4",
+    "vue-router": "^4.3",
+    "pinia": "^2.1",
+    "naive-ui": "^2.38",
+    "axios": "^1.6",
+    "@vicons/ionicons5": "^0.12",
+    "date-fns": "^3.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0",
+    "vite": "^5.0",
+    "typescript": "^5.3",
+    "vue-tsc": "^2.0"
+  }
+}

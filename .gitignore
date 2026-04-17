@@ -19,3 +19,7 @@ target
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+/FRONTEND_SUMMARY.md
+/CODEX_HANDOFF.md
+/CLAUDE.md
+/Terraria_Console_Linux_使用手册.docx

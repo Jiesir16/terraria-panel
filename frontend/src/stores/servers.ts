@@ -1,0 +1,131 @@
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+import { serverApi, ServerStatus, CreateServerRequest, UpdateServerRequest, ServerConfig } from '../api/server'
+
+export const useServersStore = defineStore('servers', () => {
+  const servers = ref<ServerStatus[]>([])
+  const currentServer = ref<ServerStatus | null>(null)
+  const loading = ref(false)
+
+  const runningCount = computed(() =>
+    servers.value.filter(s => s.status === 'running').length
+  )
+
+  const totalPlayers = computed(() =>
+    servers.value.reduce((sum, s) => sum + s.player_count, 0)
+  )
+
+  async function fetchServers() {
+    loading.value = true
+    try {
+      const response = await serverApi.getList()
+      servers.value = response.data
+      return response.data
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function fetchServer(id: string) {
+    try {
+      const response = await serverApi.getDetail(id)
+      currentServer.value = response.data
+      const index = servers.value.findIndex(s => s.id === id)
+      if (index >= 0) {
+        servers.value[index] = response.data
+      }
+      return response.data
+    } catch (error) {
+      throw error
+    }
+  }
+
+  async function createServer(data: CreateServerRequest) {
+    const response = await serverApi.create(data)
+    servers.value.push(response.data)
+    return response.data
+  }
+
+  async function updateServer(id: string, data: UpdateServerRequest) {
+    const response = await serverApi.update(id, data)
+    const index = servers.value.findIndex(s => s.id === id)
+    if (index >= 0) {
+      servers.value[index] = response.data
+    }
+    if (currentServer.value?.id === id) {
+      currentServer.value = response.data
+    }
+    return response.data
+  }
+
+  async function deleteServer(id: string) {
+    await serverApi.delete(id)
+    servers.value = servers.value.filter(s => s.id !== id)
+    if (currentServer.value?.id === id) {
+      currentServer.value = null
+    }
+  }
+
+  async function startServer(id: string) {
+    await serverApi.start(id)
+    await fetchServer(id)
+  }
+
+  async function stopServer(id: string) {
+    await serverApi.stop(id)
+    await fetchServer(id)
+  }
+
+  async function restartServer(id: string) {
+    await serverApi.restart(id)
+    await fetchServer(id)
+  }
+
+  async function sendCommand(id: string, command: string) {
+    return serverApi.sendCommand(id, command)
+  }
+
+  async function getConfig(id: string) {
+    const response = await serverApi.getConfig(id)
+    return response.data
+  }
+
+  async function updateConfig(id: string, config: ServerConfig) {
+    return serverApi.updateConfig(id, config)
+  }
+
+  async function importConfig(id: string, config: ServerConfig) {
+    return serverApi.importConfig(id, config)
+  }
+
+  async function exportConfig(id: string) {
+    const response = await serverApi.exportConfig(id)
+    return response.data
+  }
+
+  function getServerById(id: string) {
+    return servers.value.find(s => s.id === id)
+  }
+
+  return {
+    servers,
+    currentServer,
+    loading,
+    runningCount,
+    totalPlayers,
+    fetchServers,
+    fetchServer,
+    createServer,
+    updateServer,
+    deleteServer,
+    startServer,
+    stopServer,
+    restartServer,
+    sendCommand,
+    getConfig,
+    updateConfig,
+    importConfig,
+    exportConfig,
+    getServerById
+  }
+})
