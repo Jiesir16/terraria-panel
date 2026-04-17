@@ -1,0 +1,23 @@
+[server]
+host = "0.0.0.0"
+port = 3000
+data_dir = "./data"
+log_dir = "./logs"
+frontend_dir = "./frontend/dist"
+
+[auth]
+jwt_secret = "dev-secret-change-me-in-production"
+jwt_expire_hours = 24
+allow_register = false
+
+[tshock]
+dotnet_path = "/usr/bin/dotnet"
+mono_path = "/usr/bin/mono"
+github_mirror = ""
+default_port_range_start = 7777
+default_port_range_end = 7800
+
+[backup]
+enabled = true
+interval_minutes = 30
+max_backups_per_server = 10
