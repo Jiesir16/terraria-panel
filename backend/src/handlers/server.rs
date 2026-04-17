@@ -14,6 +14,52 @@ use crate::{
     handlers::AppState,
 };
 
+async fn is_server_port_ready(port: u16) -> bool {
+    use tokio::net::TcpStream;
+    use tokio::time::{timeout, Duration};
+
+    let targets = [format!("127.0.0.1:{}", port), format!("[::1]:{}", port)];
+    for target in targets {
+        if timeout(Duration::from_millis(500), TcpStream::connect(&target))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .is_some()
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+async fn wait_for_server_ready(
+    state: &AppState,
+    server_id: &str,
+    port: u16,
+    timeout_secs: u64,
+) -> Result<bool, AppError> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+
+    loop {
+        if is_server_port_ready(port).await {
+            return Ok(true);
+        }
+
+        if !state.process_manager.is_running(server_id).await {
+            return Err(AppError::ProcessError(
+                "服务器进程启动后立即退出，请检查后端日志（stderr）了解详情".to_string(),
+            ));
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
 fn is_world_file_name(name: &str) -> bool {
     name.ends_with(".wld") || name.ends_with(".wld.bak") || name.ends_with(".bak")
 }
@@ -590,14 +636,7 @@ pub async fn start_server(
         )
         .await?;
 
-    // Wait briefly and verify the process didn't crash immediately
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    if !state.process_manager.is_running(&id).await {
-        tracing::error!(server_id = %id, "TShock process exited immediately after spawn");
-        return Err(AppError::ProcessError(
-            "服务器进程启动后立即退出，请检查后端日志（stderr）了解详情".to_string()
-        ));
-    }
+    let ready = wait_for_server_ready(&state, &id, port, 30).await?;
 
     // Update database status — block ensures MutexGuard doesn't leak
     {
@@ -608,16 +647,30 @@ pub async fn start_server(
         let now = Utc::now().to_rfc3339();
         db.execute(
             "UPDATE servers SET status = ?1, updated_at = ?2 WHERE id = ?3",
-            params!["running", now, id],
+            params![if ready { "running" } else { "starting" }, now, id],
         )
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
     }
 
-    tracing::info!(user = %auth.username, server_id = %id, port = port, "Server started successfully");
+    if ready {
+        tracing::info!(user = %auth.username, server_id = %id, port = port, "Server started successfully");
+    } else {
+        tracing::warn!(
+            user = %auth.username,
+            server_id = %id,
+            port = port,
+            "Server process is running but port is not ready yet"
+        );
+    }
 
     Ok(Json(json!({
         "success": true,
-        "message": "Server started successfully"
+        "message": if ready {
+            "Server started successfully"
+        } else {
+            "Server process started, but world is still loading and port is not ready yet"
+        },
+        "ready": ready
     })))
 }
 
@@ -700,12 +753,37 @@ pub async fn server_status(
     _auth: Auth,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let is_running = state.process_manager.is_running(&id).await;
-    let status = if is_running { "running" } else { "stopped" };
+    let (port, db_status): (u16, Option<String>) = {
+        let db = state.db.lock().map_err(|_| {
+            AppError::InternalServerError("Failed to acquire database lock".to_string())
+        })?;
+        db.query_row(
+            "SELECT port, status FROM servers WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| AppError::NotFound("Server not found".to_string()))?
+    };
+
+    let process_running = state.process_manager.is_running(&id).await;
+    let port_ready = if process_running {
+        is_server_port_ready(port).await
+    } else {
+        false
+    };
+    let status = if port_ready {
+        "running"
+    } else if process_running {
+        "starting"
+    } else {
+        "stopped"
+    };
 
     Ok(Json(json!({
         "status": status,
-        "running": is_running
+        "running": port_ready,
+        "process_running": process_running,
+        "db_status": db_status
     })))
 }
 
