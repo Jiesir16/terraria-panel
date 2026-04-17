@@ -2,9 +2,14 @@
   <div class="server-list">
     <div class="header">
       <h1>服务器管理</h1>
-      <n-button type="primary" @click="showCreateModal = true">
-        + 新建服务器
-      </n-button>
+      <div class="header-actions">
+        <n-button @click="loadServers">
+          刷新状态
+        </n-button>
+        <n-button type="primary" @click="showCreateModal = true">
+          + 新建服务器
+        </n-button>
+      </div>
     </div>
 
     <n-spin :show="loading">
@@ -36,6 +41,10 @@ const notification = useNotification()
 
 const showCreateModal = ref(false)
 const loading = ref(false)
+
+function isServerActive(status: string) {
+  return status !== 'stopped'
+}
 
 const columns = computed(() => [
   {
@@ -72,7 +81,7 @@ const columns = computed(() => [
   {
     title: '操作',
     key: 'actions',
-    width: 200,
+    width: 260,
     align: 'center' as const,
     render: (row: any) => h(
       NSpace,
@@ -83,11 +92,11 @@ const columns = computed(() => [
             NButton,
             {
               text: true,
-              type: row.status === 'running' ? 'error' : 'primary',
+              type: isServerActive(row.status) ? 'error' : 'primary',
               size: 'small',
-              onClick: () => row.status === 'running' ? handleStop(row.id) : handleStart(row.id)
+              onClick: () => isServerActive(row.status) ? handleStop(row.id) : handleStart(row.id)
             },
-            { default: () => row.status === 'running' ? '停止' : '启动' }
+            { default: () => isServerActive(row.status) ? '停止' : '启动' }
           ),
           h(
             NButton,
@@ -98,6 +107,16 @@ const columns = computed(() => [
               onClick: () => router.push(`/servers/${row.id}`)
             },
             { default: () => '详情' }
+          ),
+          h(
+            NButton,
+            {
+              text: true,
+              type: 'warning',
+              size: 'small',
+              onClick: () => handleKill(row.id)
+            },
+            { default: () => '强制结束' }
           ),
           h(
             NButton,
@@ -128,10 +147,11 @@ async function loadServers() {
 
 async function handleStart(serverId: string) {
   try {
-    await serversStore.startServer(serverId)
-    notification.success('服务器已启动', '')
+    const result = await serversStore.startServer(serverId)
+    notification.success('启动请求已发送', result?.message || '')
+    await loadServers()
   } catch (error: any) {
-    notification.error('启动失败', error?.response?.data?.message || '')
+    notification.error('启动失败', error?.response?.data?.error || '')
   }
 }
 
@@ -139,8 +159,19 @@ async function handleStop(serverId: string) {
   try {
     await serversStore.stopServer(serverId)
     notification.success('服务器已停止', '')
+    await loadServers()
   } catch (error: any) {
-    notification.error('停止失败', error?.response?.data?.message || '')
+    notification.error('停止失败', error?.response?.data?.error || '')
+  }
+}
+
+async function handleKill(serverId: string) {
+  try {
+    const result = await serversStore.killServer(serverId)
+    notification.success('强制结束信号已发送', result?.message || '')
+    await loadServers()
+  } catch (error: any) {
+    notification.error('强制结束失败', error?.response?.data?.error || '')
   }
 }
 
@@ -175,6 +206,11 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.header-actions {
+  display: flex;
+  gap: 12px;
 }
 
 .header h1 {

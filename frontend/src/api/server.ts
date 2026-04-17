@@ -55,6 +55,13 @@ export interface WorldFile {
   is_backup: boolean
 }
 
+export interface ServerRuntimeStatus {
+  status: 'stopped' | 'starting' | 'running'
+  running: boolean
+  process_running: boolean
+  db_status?: string
+}
+
 export interface ServerConfig {
   [key: string]: any
 }
@@ -81,6 +88,9 @@ export const serverApi = {
   stop: (id: string) =>
     api.post(`/servers/${id}/stop`),
 
+  kill: (id: string) =>
+    api.post(`/servers/${id}/kill`),
+
   restart: (id: string) =>
     api.post(`/servers/${id}/restart`),
 
@@ -88,7 +98,12 @@ export const serverApi = {
     api.post(`/servers/${id}/command`, { command }),
 
   getStatus: (id: string) =>
-    api.get<ServerStatus>(`/servers/${id}/status`),
+    api.get<ServerRuntimeStatus>(`/servers/${id}/status`),
+
+  getRecentLogs: (id: string, limit = 200) =>
+    api.get<string[]>(`/servers/${id}/logs`, {
+      params: { limit }
+    }),
 
   getConfig: (id: string) =>
     api.get<ServerConfig>(`/servers/${id}/config`),

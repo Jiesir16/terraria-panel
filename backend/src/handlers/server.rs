@@ -196,6 +196,47 @@ fn write_server_config_file(
     Ok(server_config_path.to_string_lossy().to_string())
 }
 
+fn sync_tshock_runtime_config(
+    config_dir: &std::path::Path,
+    server_name: &str,
+    port: u16,
+    max_players: i32,
+    password: &Option<String>,
+) -> Result<(), AppError> {
+    let config_path = config_dir.join("config.json");
+    let mut config = if config_path.exists() {
+        let content = std::fs::read_to_string(&config_path)
+            .map_err(|e| AppError::FileError(format!("Failed to read config.json: {}", e)))?;
+        serde_json::from_str::<serde_json::Value>(&content).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    if !config.is_object() {
+        config = serde_json::json!({});
+    }
+
+    let obj = config
+        .as_object_mut()
+        .ok_or_else(|| AppError::BadRequest("Invalid TShock config format".to_string()))?;
+
+    obj.insert("ServerPort".to_string(), serde_json::json!(port));
+    obj.insert("MaxSlots".to_string(), serde_json::json!(max_players));
+    obj.insert("ServerName".to_string(), serde_json::json!(server_name));
+    obj.insert("UseServerName".to_string(), serde_json::json!(true));
+    obj.insert(
+        "ServerPassword".to_string(),
+        serde_json::json!(password.clone().unwrap_or_default()),
+    );
+
+    let content = serde_json::to_string_pretty(&config)
+        .map_err(|e| AppError::BadRequest(format!("Failed to serialize TShock config: {}", e)))?;
+    std::fs::write(&config_path, content)
+        .map_err(|e| AppError::FileError(format!("Failed to write config.json: {}", e)))?;
+
+    Ok(())
+}
+
 fn load_servers_from_db(state: &AppState) -> Result<Vec<Server>, AppError> {
     let db = state.db.lock().map_err(|_| {
         AppError::InternalServerError("Failed to acquire database lock".to_string())
@@ -631,6 +672,7 @@ pub async fn start_server(
     let _ = std::fs::create_dir_all(server_dir.join("logs"));
 
     let config_path = server_dir.join("tshock");
+    sync_tshock_runtime_config(&config_path, &server_name, port, max_players, &password)?;
 
     // Resolve world file path
     let world_dir = server_dir.join("world");
@@ -789,6 +831,40 @@ pub async fn stop_server(
     Ok(Json(json!({
         "success": true,
         "message": "Server stopped successfully"
+    })))
+}
+
+pub async fn kill_server(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::warn!(user = %auth.username, server_id = %id, "Force killing server");
+
+    if !auth.is_operator_or_admin() {
+        return Err(AppError::Forbidden(
+            "Only operators and admins can kill servers".to_string(),
+        ));
+    }
+
+    state.process_manager.kill_server(&id).await?;
+
+    {
+        let db = state.db.lock().map_err(|_| {
+            AppError::InternalServerError("Failed to acquire database lock".to_string())
+        })?;
+
+        let now = Utc::now().to_rfc3339();
+        db.execute(
+            "UPDATE servers SET status = ?1, updated_at = ?2 WHERE id = ?3",
+            params!["stopped", now, id],
+        )
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+    }
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "Server force kill signal sent"
     })))
 }
 

@@ -1,6 +1,7 @@
 use crate::error::AppError;
 use crate::models::ServerStatus;
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
@@ -11,6 +12,8 @@ use tokio::sync::{broadcast, RwLock};
 pub struct ServerProcess {
     pub stdin_tx: tokio::sync::mpsc::UnboundedSender<String>,
     pub log_tx: broadcast::Sender<String>,
+    pub log_history: Arc<tokio::sync::Mutex<VecDeque<String>>>,
+    pub pid: u32,
     #[allow(dead_code)]
     pub status: ServerStatus,
 }
@@ -19,6 +22,8 @@ pub struct ServerProcess {
 pub struct ProcessManager {
     processes: Arc<RwLock<HashMap<String, ServerProcess>>>,
 }
+
+const MAX_LOG_HISTORY_LINES: usize = 2000;
 
 impl ProcessManager {
     pub fn new() -> Self {
@@ -210,6 +215,9 @@ impl ProcessManager {
 
         let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel();
         let (log_tx, _log_rx) = broadcast::channel(1000);
+        let log_history = Arc::new(tokio::sync::Mutex::new(VecDeque::with_capacity(
+            MAX_LOG_HISTORY_LINES,
+        )));
 
         // Spawn stdin writer task
         let server_id_stdin = server_id.to_string();
@@ -225,6 +233,7 @@ impl ProcessManager {
 
         // Spawn stdout reader task
         let log_tx_stdout = log_tx.clone();
+        let log_history_stdout = Arc::clone(&log_history);
         let server_id_stdout = server_id.to_string();
         tokio::spawn(async move {
             use tokio::io::AsyncBufReadExt;
@@ -232,6 +241,13 @@ impl ProcessManager {
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 tracing::trace!(server_id = %server_id_stdout, line = %line, "stdout");
+                {
+                    let mut history = log_history_stdout.lock().await;
+                    if history.len() >= MAX_LOG_HISTORY_LINES {
+                        history.pop_front();
+                    }
+                    history.push_back(line.clone());
+                }
                 let _ = log_tx_stdout.send(line);
             }
             tracing::info!(server_id = %server_id_stdout, "Stdout reader task ended");
@@ -239,6 +255,7 @@ impl ProcessManager {
 
         // Spawn stderr reader task — merge into same log channel
         let log_tx_stderr = log_tx.clone();
+        let log_history_stderr = Arc::clone(&log_history);
         let server_id_stderr = server_id.to_string();
         tokio::spawn(async move {
             use tokio::io::AsyncBufReadExt;
@@ -246,7 +263,15 @@ impl ProcessManager {
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 tracing::warn!(server_id = %server_id_stderr, stderr = %line, "TShock stderr");
-                let _ = log_tx_stderr.send(format!("[STDERR] {}", line));
+                let stderr_line = format!("[STDERR] {}", line);
+                {
+                    let mut history = log_history_stderr.lock().await;
+                    if history.len() >= MAX_LOG_HISTORY_LINES {
+                        history.pop_front();
+                    }
+                    history.push_back(stderr_line.clone());
+                }
+                let _ = log_tx_stderr.send(stderr_line);
             }
             tracing::info!(server_id = %server_id_stderr, "Stderr reader task ended");
         });
@@ -254,6 +279,8 @@ impl ProcessManager {
         let process = ServerProcess {
             stdin_tx,
             log_tx,
+            log_history,
+            pid,
             status: ServerStatus::Running,
         };
 
@@ -298,25 +325,89 @@ impl ProcessManager {
     }
 
     pub async fn stop_server(&self, server_id: &str) -> Result<(), AppError> {
-        let mut processes = self.processes.write().await;
+        let (stdin_tx, pid) = {
+            let processes = self.processes.read().await;
+            if let Some(process) = processes.get(server_id) {
+                (process.stdin_tx.clone(), process.pid)
+            } else {
+                tracing::warn!(server_id = %server_id, "Cannot stop: server not running");
+                return Err(AppError::NotFound(format!("Server {} not running", server_id)));
+            }
+        };
 
-        if let Some(process) = processes.remove(server_id) {
-            tracing::info!(server_id = %server_id, "Stopping server: sending exit command");
-            // Send exit command via stdin
-            let _ = process.stdin_tx.send("exit".to_string());
+        tracing::info!(server_id = %server_id, pid = pid, "Stopping server: sending exit command");
+        let _ = stdin_tx.send("exit".to_string());
 
-            // The exit watcher task will detect the process exit and update DB.
-            // We just wait a bit for graceful shutdown confirmation.
-            drop(processes); // release lock so exit watcher can work
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if !self.is_running(server_id).await {
+                tracing::info!(server_id = %server_id, "Server exited after graceful stop");
+                return Ok(());
+            }
 
-            // Give TShock a moment to process the exit command
-            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
 
-            tracing::info!(server_id = %server_id, "Stop command sent");
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+
+        tracing::warn!(server_id = %server_id, pid = pid, "Graceful stop timed out, sending SIGTERM");
+        Self::signal_process(pid, false)?;
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if !self.is_running(server_id).await {
+                tracing::info!(server_id = %server_id, "Server exited after SIGTERM");
+                return Ok(());
+            }
+
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+
+        tracing::warn!(server_id = %server_id, pid = pid, "SIGTERM timed out, sending SIGKILL");
+        Self::signal_process(pid, true)?;
+        Ok(())
+    }
+
+    pub async fn kill_server(&self, server_id: &str) -> Result<(), AppError> {
+        let pid = {
+            let processes = self.processes.read().await;
+            if let Some(process) = processes.get(server_id) {
+                process.pid
+            } else {
+                tracing::warn!(server_id = %server_id, "Cannot kill: server not running");
+                return Err(AppError::NotFound(format!("Server {} not running", server_id)));
+            }
+        };
+
+        tracing::warn!(server_id = %server_id, pid = pid, "Force killing server process");
+        Self::signal_process(pid, true)?;
+        Ok(())
+    }
+
+    fn signal_process(pid: u32, force: bool) -> Result<(), AppError> {
+        #[cfg(unix)]
+        {
+            use nix::sys::signal::{kill, Signal};
+            use nix::unistd::Pid;
+
+            let signal = if force { Signal::SIGKILL } else { Signal::SIGTERM };
+            kill(Pid::from_raw(pid as i32), signal)
+                .map_err(|e| AppError::ProcessError(format!("Failed to signal process {}: {}", pid, e)))?;
             Ok(())
-        } else {
-            tracing::warn!(server_id = %server_id, "Cannot stop: server not running");
-            Err(AppError::NotFound(format!("Server {} not running", server_id)))
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = (pid, force);
+            Err(AppError::ProcessError(
+                "Force kill is only implemented on Unix-like systems".to_string(),
+            ))
         }
     }
 
@@ -362,6 +453,25 @@ impl ProcessManager {
     pub async fn is_running(&self, server_id: &str) -> bool {
         let processes = self.processes.read().await;
         processes.contains_key(server_id)
+    }
+
+    pub async fn get_recent_logs(
+        &self,
+        server_id: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, AppError> {
+        let history = {
+            let processes = self.processes.read().await;
+            let process = processes
+                .get(server_id)
+                .ok_or_else(|| AppError::NotFound(format!("Server {} not running", server_id)))?;
+            Arc::clone(&process.log_history)
+        };
+
+        let history = history.lock().await;
+        let limit = limit.min(MAX_LOG_HISTORY_LINES);
+        let start = history.len().saturating_sub(limit);
+        Ok(history.iter().skip(start).cloned().collect())
     }
 }
 

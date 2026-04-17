@@ -26,7 +26,7 @@
 
     <div class="card-actions">
       <n-button
-        v-if="server.status === 'running'"
+        v-if="server.status !== 'stopped'"
         text
         type="error"
         size="small"

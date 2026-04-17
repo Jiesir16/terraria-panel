@@ -6,8 +6,14 @@
         <server-status-badge :status="currentServer?.status || 'stopped'" />
       </div>
       <div class="header-actions">
+        <n-button @click="handleRefresh">
+          刷新状态
+        </n-button>
+        <n-button type="warning" @click="handleKill">
+          强制结束
+        </n-button>
         <n-button
-          v-if="currentServer?.status === 'running'"
+          v-if="isCurrentServerActive"
           type="error"
           @click="handleStop"
         >
@@ -121,15 +127,22 @@ let statusPollTimer: ReturnType<typeof setInterval> | null = null
 
 const currentServer = computed(() => serversStore.currentServer)
 
+const isCurrentServerActive = computed(() => currentServer.value?.status !== 'stopped')
+
 async function loadServer() {
   loading.value = true
   try {
-    await serversStore.fetchServer(serverId)
+    await serversStore.refreshServerRuntime(serverId)
   } catch (error) {
     notification.error('加载服务器失败', '')
   } finally {
     loading.value = false
   }
+}
+
+async function handleRefresh() {
+  await loadServer()
+  notification.success('状态已刷新', '')
 }
 
 async function loadMods() {
@@ -158,11 +171,11 @@ async function loadSaves() {
 
 async function handleStart() {
   try {
-    await serversStore.startServer(serverId)
-    notification.success('服务器已启动', '')
+    const result = await serversStore.startServer(serverId)
+    notification.success('启动请求已发送', result?.message || '')
     await loadServer()
   } catch (error: any) {
-    notification.error('启动失败', error?.response?.data?.message || '')
+    notification.error('启动失败', error?.response?.data?.error || '')
   }
 }
 
@@ -172,7 +185,17 @@ async function handleStop() {
     notification.success('服务器已停止', '')
     await loadServer()
   } catch (error: any) {
-    notification.error('停止失败', error?.response?.data?.message || '')
+    notification.error('停止失败', error?.response?.data?.error || '')
+  }
+}
+
+async function handleKill() {
+  try {
+    const result = await serversStore.killServer(serverId)
+    notification.success('强制结束信号已发送', result?.message || '')
+    await loadServer()
+  } catch (error: any) {
+    notification.error('强制结束失败', error?.response?.data?.error || '')
   }
 }
 
@@ -182,7 +205,7 @@ async function handleRestart() {
     notification.success('服务器已重启', '')
     await loadServer()
   } catch (error: any) {
-    notification.error('重启失败', error?.response?.data?.message || '')
+    notification.error('重启失败', error?.response?.data?.error || '')
   }
 }
 
@@ -258,7 +281,7 @@ onMounted(() => {
   loadSaves()
   // Poll server status every 5 seconds to keep UI in sync
   statusPollTimer = setInterval(() => {
-    serversStore.fetchServer(serverId).catch(() => {})
+    serversStore.refreshServerRuntime(serverId).catch(() => {})
   }, 5000)
 })
 

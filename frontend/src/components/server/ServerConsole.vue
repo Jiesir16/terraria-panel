@@ -4,6 +4,18 @@
       <span :class="connected ? 'status-connected' : 'status-disconnected'">
         {{ connected ? '已连接' : '未连接' }}
       </span>
+      <n-select
+        v-model:value="historyLines"
+        size="tiny"
+        :options="historyOptions"
+        style="width: 120px"
+      />
+      <n-button text type="primary" size="tiny" @click="handleReloadHistory">
+        刷新日志
+      </n-button>
+      <n-button text size="tiny" @click="clearMessages">
+        清空
+      </n-button>
       <n-button v-if="!connected" text type="primary" size="tiny" @click="handleReconnect">
         重新连接
       </n-button>
@@ -63,10 +75,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, onUnmounted } from 'vue'
-import { NInput, NButton, NSpace } from 'naive-ui'
+import { ref, nextTick, watch, onUnmounted } from 'vue'
+import { NInput, NButton, NSpace, NSelect } from 'naive-ui'
 import { useWebSocket } from '../../composables/useWebSocket'
 import { useNotification } from '../../composables/useNotification'
+import { serverApi } from '../../api/server'
 
 interface Props {
   serverId: string
@@ -80,10 +93,18 @@ const inputRef = ref()
 const commandInput = ref('')
 const commandHistory = ref<string[]>([])
 const historyIndex = ref(-1)
+const historyLines = ref(200)
+const historyOptions = [
+  { label: '最近 100 行', value: 100 },
+  { label: '最近 200 行', value: 200 },
+  { label: '最近 500 行', value: 500 },
+  { label: '最近 1000 行', value: 1000 }
+]
 
-const { sendCommand: wsSendCommand, connected, messages, reconnect } = useWebSocket(
+const { sendCommand: wsSendCommand, connected, messages, reconnect, clearMessages } = useWebSocket(
   props.serverId,
   {
+    historyLines: historyLines.value,
     onMessage: () => {
       nextTick(() => {
         scrollToBottom()
@@ -98,6 +119,21 @@ const { sendCommand: wsSendCommand, connected, messages, reconnect } = useWebSoc
 function handleReconnect() {
   reconnect()
   notification.success('正在重新连接...', '')
+}
+
+async function handleReloadHistory() {
+  try {
+    const response = await serverApi.getRecentLogs(props.serverId, historyLines.value)
+    messages.value = response.data
+    nextTick(() => {
+      scrollToBottom()
+    })
+    if (!connected.value) {
+      reconnect()
+    }
+  } catch (error: any) {
+    notification.error('刷新日志失败', error?.response?.data?.error || '')
+  }
 }
 
 function getLogClass(message: string): string {
@@ -160,6 +196,10 @@ function handleKeyup(e: KeyboardEvent) {
 
 onUnmounted(() => {
   // Cleanup is handled by useWebSocket
+})
+
+watch(historyLines, () => {
+  handleReloadHistory()
 })
 </script>
 

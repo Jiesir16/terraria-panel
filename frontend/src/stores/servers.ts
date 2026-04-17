@@ -82,18 +82,53 @@ export const useServersStore = defineStore('servers', () => {
   }
 
   async function startServer(id: string) {
-    await serverApi.start(id)
+    const response = await serverApi.start(id)
     await fetchServer(id)
+    return response.data
   }
 
   async function stopServer(id: string) {
-    await serverApi.stop(id)
+    const response = await serverApi.stop(id)
     await fetchServer(id)
+    return response.data
   }
 
   async function restartServer(id: string) {
-    await serverApi.restart(id)
+    const response = await serverApi.restart(id)
     await fetchServer(id)
+    return response.data
+  }
+
+  async function killServer(id: string) {
+    const response = await serverApi.kill(id)
+    await fetchServer(id)
+    return response.data
+  }
+
+  async function refreshServerRuntime(id: string) {
+    const [detailResponse, statusResponse] = await Promise.all([
+      serverApi.getDetail(id),
+      serverApi.getStatus(id)
+    ])
+
+    const detail = detailResponse.data as ServerDetailResponse
+    const flat: ServerStatus = {
+      ...detail.server,
+      status: statusResponse.data.status,
+      player_count: detail.player_count ?? 0,
+      uptime_seconds: detail.uptime_seconds ?? 0
+    }
+
+    currentServer.value = flat
+    const index = servers.value.findIndex(s => s.id === id)
+    if (index >= 0) {
+      servers.value[index] = flat
+    }
+
+    return {
+      server: flat,
+      runtime: statusResponse.data
+    }
   }
 
   async function sendCommand(id: string, command: string) {
@@ -136,6 +171,8 @@ export const useServersStore = defineStore('servers', () => {
     startServer,
     stopServer,
     restartServer,
+    killServer,
+    refreshServerRuntime,
     sendCommand,
     getConfig,
     updateConfig,

@@ -8,6 +8,7 @@ export interface UseWebSocketOptions {
   onClose?: () => void
   reconnectAttempts?: number
   reconnectDelay?: number
+  historyLines?: number
   /** If false, don't auto-connect on mount */
   autoConnect?: boolean
 }
@@ -26,6 +27,7 @@ export function useWebSocket(
 
   const reconnectAttempts = options.reconnectAttempts ?? 3
   const reconnectDelay = options.reconnectDelay ?? 3000
+  const historyLines = options.historyLines ?? 200
   const autoConnect = options.autoConnect ?? true
 
   function connect() {
@@ -40,7 +42,7 @@ export function useWebSocket(
     // In dev mode, connect directly to backend (port 3000) to avoid Vite proxy issues;
     // in production, the frontend is served by the backend so use same host
     const wsHost = import.meta.env.DEV ? `${window.location.hostname}:3000` : window.location.host
-    const url = `${protocol}//${wsHost}/api/servers/${serverId}/console?token=${encodeURIComponent(token)}`
+    const url = `${protocol}//${wsHost}/api/servers/${serverId}/console?token=${encodeURIComponent(token)}&history=${historyLines}`
 
     try {
       ws.value = new WebSocket(url)
