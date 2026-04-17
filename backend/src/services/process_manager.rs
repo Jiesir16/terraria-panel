@@ -36,6 +36,8 @@ impl ProcessManager {
         max_players: i32,
         password: &Option<String>,
         world_path: &Option<String>,
+        autocreate: Option<u32>,
+        world_name_for_create: &Option<String>,
     ) -> Result<(), AppError> {
         let mut processes = self.processes.write().await;
 
@@ -86,6 +88,20 @@ impl ProcessManager {
                 cmd.arg("-world").arg(world);
             } else {
                 tracing::warn!(server_id = %server_id, world = %world, "World file not found, starting without -world flag");
+            }
+        }
+
+        // autocreate: 1=small, 2=medium, 3=large — tells TShock to create a new world
+        if let Some(size) = autocreate {
+            if size >= 1 && size <= 3 {
+                tracing::info!(server_id = %server_id, autocreate = size, "Auto-creating world");
+                cmd.arg("-autocreate").arg(size.to_string());
+            }
+        }
+
+        if let Some(wn) = world_name_for_create {
+            if !wn.is_empty() {
+                cmd.arg("-worldname").arg(wn);
             }
         }
 

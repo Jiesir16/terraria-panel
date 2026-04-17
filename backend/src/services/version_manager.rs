@@ -325,12 +325,32 @@ impl VersionManager {
         let mut archive = zip::ZipArchive::new(file)
             .map_err(|e| AppError::FileError(format!("Failed to read zip: {}", e)))?;
 
+        // Detect common top-level prefix to flatten nested zips.
+        // TShock releases often have all files under a single directory like
+        // "TShock-5-2-0-Beta/..." — we strip that prefix so TShock.Server.dll
+        // ends up directly in extract_to.
+        let prefix_to_strip = Self::detect_common_prefix(&mut archive);
+
         for i in 0..archive.len() {
             let mut file = archive
                 .by_index(i)
                 .map_err(|e| AppError::FileError(format!("Failed to get file from zip: {}", e)))?;
 
-            let output_path = extract_to.join(file.name());
+            let raw_name = file.name().to_string();
+
+            // Strip common prefix if detected
+            let relative = if let Some(ref prefix) = prefix_to_strip {
+                raw_name.strip_prefix(prefix).unwrap_or(&raw_name)
+            } else {
+                &raw_name
+            };
+
+            // Skip empty paths (the prefix directory itself)
+            if relative.is_empty() || relative == "/" {
+                continue;
+            }
+
+            let output_path = extract_to.join(relative);
 
             if file.is_dir() {
                 std::fs::create_dir_all(&output_path)
@@ -352,6 +372,33 @@ impl VersionManager {
         Ok(())
     }
 
+    /// If every entry in the zip shares a single top-level directory prefix,
+    /// return it (with trailing `/`).  This lets us flatten archives like
+    /// `TShock-Beta-v2024.05.31.0/TShock.Server.dll` → `TShock.Server.dll`.
+    fn detect_common_prefix(archive: &mut zip::ZipArchive<std::fs::File>) -> Option<String> {
+        let mut common: Option<String> = None;
+        for i in 0..archive.len() {
+            if let Ok(entry) = archive.by_index(i) {
+                let name = entry.name().to_string();
+                // Extract first path component
+                let first = match name.find('/') {
+                    Some(idx) => &name[..=idx], // e.g. "TShock-Beta/"
+                    None => return None,        // top-level file → no prefix to strip
+                };
+                match &common {
+                    None => common = Some(first.to_string()),
+                    Some(existing) => {
+                        if existing != first {
+                            return None; // multiple top-level entries
+                        }
+                    }
+                }
+            }
+        }
+        // Only strip if the prefix is a directory (ends with /)
+        common.filter(|p| p.ends_with('/'))
+    }
+
     pub fn delete_version(&self, version: &str) -> Result<(), AppError> {
         let version_dir = self.versions_dir.join(version);
 
@@ -370,16 +417,41 @@ impl VersionManager {
 
     pub fn get_version_path(&self, version: &str) -> Option<PathBuf> {
         let path = self.versions_dir.join(version);
-        if path.exists() {
-            Some(path)
-        } else {
-            None
+        if !path.exists() {
+            return None;
         }
+        // If TShock.Server.dll is directly in the version dir, return it.
+        if path.join("TShock.Server.dll").exists() {
+            return Some(path);
+        }
+        // Otherwise search one level down for a nested directory containing the DLL
+        // (handles already-downloaded zips that weren't flattened).
+        if let Ok(entries) = std::fs::read_dir(&path) {
+            for entry in entries.flatten() {
+                let sub = entry.path();
+                if sub.is_dir() && sub.join("TShock.Server.dll").exists() {
+                    return Some(sub);
+                }
+            }
+        }
+        // Fallback: return the base path (for Mono-based or unknown layouts)
+        Some(path)
     }
 
     pub fn is_dotnet_version(&self, version_path: &Path) -> bool {
-        let dll_path = version_path.join("TShock.Server.dll");
-        dll_path.exists()
+        if version_path.join("TShock.Server.dll").exists() {
+            return true;
+        }
+        // Check one level down
+        if let Ok(entries) = std::fs::read_dir(version_path) {
+            for entry in entries.flatten() {
+                let sub = entry.path();
+                if sub.is_dir() && sub.join("TShock.Server.dll").exists() {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn get_dir_size(&self, path: &Path) -> Result<u64, AppError> {

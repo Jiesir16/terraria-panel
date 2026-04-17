@@ -28,9 +28,19 @@ export interface CreateServerRequest {
 
 export interface UpdateServerRequest {
   name?: string
+  port?: number
   password?: string
   max_players?: number
   auto_start?: boolean
+  world_name?: string
+  tshock_version?: string
+}
+
+export interface WorldFile {
+  name: string
+  size: number
+  modified: string
+  is_backup: boolean
 }
 
 export interface ServerConfig {
@@ -78,5 +88,8 @@ export const serverApi = {
     api.post(`/servers/${id}/config/import`, config),
 
   exportConfig: (id: string) =>
-    api.get<ServerConfig>(`/servers/${id}/config/export`)
+    api.get<ServerConfig>(`/servers/${id}/config/export`),
+
+  listWorlds: (id: string) =>
+    api.get<WorldFile[]>(`/servers/${id}/worlds`)
 }

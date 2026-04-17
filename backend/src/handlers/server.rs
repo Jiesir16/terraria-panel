@@ -277,6 +277,22 @@ pub async fn update_server(
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
         update_count += 1;
     }
+    if let Some(world_name) = &req.world_name {
+        db.execute(
+            "UPDATE servers SET world_name = ?1, updated_at = ?2 WHERE id = ?3",
+            params![world_name, now, id],
+        )
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        update_count += 1;
+    }
+    if let Some(tshock_version) = &req.tshock_version {
+        db.execute(
+            "UPDATE servers SET tshock_version = ?1, updated_at = ?2 WHERE id = ?3",
+            params![tshock_version, now, id],
+        )
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        update_count += 1;
+    }
 
     // If nothing was updated, just update the timestamp
     if update_count == 0 {
@@ -419,6 +435,7 @@ pub async fn start_server(
 
     // Resolve world file path
     let world_dir = server_dir.join("world");
+    let world_name_clone = world_name.clone();
     let world_path = world_name.and_then(|wn| {
         let resolved = resolve_world_path(&world_dir, &wn);
         if resolved.is_none() {
@@ -427,11 +444,43 @@ pub async fn start_server(
         resolved
     });
 
+    // Read TShock config for autocreate settings (world size)
+    let (autocreate, world_name_for_create) = if world_path.is_none() {
+        // No existing world file — check config for autocreate
+        let config_json_path = config_path.join("config.json");
+        if config_json_path.exists() {
+            let config_str = std::fs::read_to_string(&config_json_path).unwrap_or_default();
+            let config: serde_json::Value = serde_json::from_str(&config_str).unwrap_or_default();
+            let auto = config.get("auto_create").and_then(|v| v.as_bool()).unwrap_or(false);
+            if auto {
+                // Determine world size from config (width → autocreate size)
+                let width = config.get("world_width").and_then(|v| v.as_u64()).unwrap_or(6400);
+                let size = match width {
+                    w if w <= 4200 => 1u32,
+                    w if w <= 6400 => 2,
+                    _ => 3,
+                };
+                let wn = config.get("world_name")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .or(world_name_clone);
+                (Some(size), wn)
+            } else {
+                (None, world_name_clone)
+            }
+        } else {
+            (None, world_name_clone)
+        }
+    } else {
+        (None, None)
+    };
+
     tracing::debug!(
         server_id = %id,
         version_path = %version_path.display(),
         config_path = %config_path.display(),
         world_path = ?world_path,
+        autocreate = ?autocreate,
         "Launching TShock process"
     );
 
@@ -445,6 +494,8 @@ pub async fn start_server(
             max_players,
             &password,
             &world_path,
+            autocreate,
+            &world_name_for_create,
         )
         .await?;
 

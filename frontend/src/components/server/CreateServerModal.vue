@@ -4,8 +4,9 @@
     title="创建新服务器"
     preset="dialog"
     :on-after-leave="handleCancel"
+    style="width: 520px;"
   >
-    <n-form :model="form" :rules="rules" ref="formRef">
+    <n-form :model="form" :rules="rules" ref="formRef" label-placement="left" label-width="auto">
       <n-form-item label="服务器名称" path="name">
         <n-input v-model:value="form.name" placeholder="输入服务器名称" />
       </n-form-item>
@@ -20,19 +21,43 @@
       </n-form-item>
 
       <n-form-item label="端口" path="port">
-        <n-input-number v-model:value="form.port" placeholder="7777" :min="1024" :max="65535" />
+        <n-input-number v-model:value="form.port" placeholder="7777" :min="1024" :max="65535" style="width: 100%;" />
       </n-form-item>
 
       <n-form-item label="最大玩家数" path="max_players">
-        <n-input-number v-model:value="form.max_players" placeholder="8" :min="1" :max="255" />
+        <n-input-number v-model:value="form.max_players" placeholder="8" :min="1" :max="255" style="width: 100%;" />
       </n-form-item>
 
-      <n-form-item label="进入密码 (可选)" path="password">
+      <n-form-item label="进入密码" path="password">
         <n-input v-model:value="form.password" type="password" placeholder="不设置密码请留空" />
       </n-form-item>
 
-      <n-form-item label="世界名称 (可选)" path="world_name">
-        <n-input v-model:value="form.world_name" placeholder="世界名称" />
+      <n-divider style="margin: 12px 0;">
+        世界设置
+      </n-divider>
+
+      <n-form-item label="世界名称" path="world_name">
+        <n-input v-model:value="form.world_name" placeholder="留空则首次启动时自动创建" />
+      </n-form-item>
+
+      <n-form-item label="世界大小" path="world_size">
+        <n-select
+          v-model:value="form.world_size"
+          :options="worldSizeOptions"
+          placeholder="选择世界大小"
+        />
+      </n-form-item>
+
+      <n-form-item label="游戏难度" path="difficulty">
+        <n-select
+          v-model:value="form.difficulty"
+          :options="difficultyOptions"
+          placeholder="选择难度"
+        />
+      </n-form-item>
+
+      <n-form-item label="世界种子" path="seed">
+        <n-input v-model:value="form.seed" placeholder="留空则随机生成" />
       </n-form-item>
 
       <n-form-item>
@@ -53,8 +78,9 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { NModal, NForm, NFormItem, NInput, NInputNumber, NSelect, NCheckbox, NButton } from 'naive-ui'
+import { NModal, NForm, NFormItem, NInput, NInputNumber, NSelect, NCheckbox, NButton, NDivider } from 'naive-ui'
 import { versionApi } from '../../api/version'
+import { serverApi } from '../../api/server'
 import { useServersStore } from '../../stores/servers'
 import { useNotification } from '../../composables/useNotification'
 
@@ -85,6 +111,9 @@ const form = ref({
   max_players: 8,
   password: '',
   world_name: '',
+  world_size: 2,
+  difficulty: 0,
+  seed: '',
   auto_start: false
 })
 
@@ -99,6 +128,19 @@ const rules = {
     { required: true, type: 'number' as const, message: '请输入端口', trigger: 'change' }
   ]
 }
+
+const worldSizeOptions = [
+  { label: '小 (4200×1200)', value: 1 },
+  { label: '中 (6400×1800)', value: 2 },
+  { label: '大 (8400×2400)', value: 3 }
+]
+
+const difficultyOptions = [
+  { label: '经典 (Classic)', value: 0 },
+  { label: '专家 (Expert)', value: 1 },
+  { label: '大师 (Master)', value: 2 },
+  { label: '旅途 (Journey)', value: 3 }
+]
 
 const versionOptions = computed(() =>
   versions.value.map(v => ({
@@ -132,7 +174,8 @@ async function handleCreate() {
 
   loading.value = true
   try {
-    await serversStore.createServer({
+    // Create the server instance
+    const response = await serversStore.createServer({
       name: form.value.name,
       tshock_version: form.value.tshock_version,
       port: form.value.port,
@@ -141,6 +184,33 @@ async function handleCreate() {
       world_name: form.value.world_name || undefined,
       auto_start: form.value.auto_start
     })
+
+    // Write initial TShock config with world settings
+    const serverId = response?.id
+    if (serverId) {
+      try {
+        await serverApi.updateConfig(serverId, {
+          server_name: form.value.name,
+          port: form.value.port,
+          max_players: form.value.max_players,
+          world_name: form.value.world_name || undefined,
+          auto_create: !form.value.world_name,
+          world_width: worldSizeOptions.find(o => o.value === form.value.world_size)
+            ? [0, 4200, 6400, 8400][form.value.world_size]
+            : 6400,
+          world_height: worldSizeOptions.find(o => o.value === form.value.world_size)
+            ? [0, 1200, 1800, 2400][form.value.world_size]
+            : 1800,
+          difficulty: form.value.difficulty,
+          seed: form.value.seed || undefined,
+          server_password: form.value.password || undefined,
+        })
+      } catch (configErr) {
+        // Non-fatal: config will use defaults
+        console.warn('Failed to write initial config:', configErr)
+      }
+    }
+
     notification.success('服务器已创建', '')
     emit('created')
     handleCancel()
@@ -160,6 +230,9 @@ function handleCancel() {
     max_players: 8,
     password: '',
     world_name: '',
+    world_size: 2,
+    difficulty: 0,
+    seed: '',
     auto_start: false
   }
 }
@@ -178,10 +251,8 @@ onMounted(() => {
   margin-bottom: 16px;
 }
 
-:deep(.n-input__input-el),
-:deep(.n-select__input-el) {
-  background-color: var(--bg-input);
-  color: var(--text-primary);
-  border-color: var(--border-color);
+:deep(.n-divider) {
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 </style>

@@ -68,6 +68,8 @@ pub struct UpdateServerRequest {
     pub password: Option<String>,
     pub max_players: Option<i32>,
     pub auto_start: Option<bool>,
+    pub world_name: Option<String>,
+    pub tshock_version: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
