@@ -170,11 +170,13 @@ fn write_server_config_file(
         lines.push(format!("world={}", world_path));
     } else {
         let size = autocreate.unwrap_or(2);
-        lines.push(format!("autocreate={}", size));
         let world_name = world_name_for_create
             .as_ref()
             .map(|name| normalize_world_name_for_runtime(name))
             .unwrap_or_else(|| "world.wld".to_string());
+        let target_world_path = server_dir.join("world").join(&world_name);
+        lines.push(format!("world={}", target_world_path.display()));
+        lines.push(format!("autocreate={}", size));
         lines.push(format!(
             "worldname={}",
             world_name.trim_end_matches(".wld")
