@@ -1,5 +1,6 @@
 use crate::error::AppError;
 use crate::models::ServerStatus;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
@@ -86,6 +87,8 @@ impl ProcessManager {
                 version_path, dir_contents
             )));
         };
+
+        Self::ensure_runtime_available(version_dir, launch_mode)?;
 
         tracing::info!(
             server_id = %server_id,
@@ -358,5 +361,97 @@ impl ProcessManager {
 impl Default for ProcessManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl ProcessManager {
+    fn ensure_runtime_available(version_dir: &Path, launch_mode: &str) -> Result<(), AppError> {
+        let required_runtime = Self::detect_required_runtime_major(version_dir);
+        let dotnet_output = std::process::Command::new("dotnet")
+            .arg("--list-runtimes")
+            .output();
+
+        let output = match dotnet_output {
+            Ok(output) => output,
+            Err(e) => {
+                let requirement = required_runtime
+                    .map(|major| format!(".NET {} 运行时", major))
+                    .unwrap_or_else(|| ".NET 运行时".to_string());
+                return Err(AppError::ProcessError(format!(
+                    "当前 TShock 版本需要 {}，但服务器上未检测到可用的 `dotnet`。请先安装对应运行时后再启动。原始错误: {}",
+                    requirement, e
+                )));
+            }
+        };
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(AppError::ProcessError(format!(
+                "无法检测服务器上的 .NET 运行时（执行 `dotnet --list-runtimes` 失败）。请先安装 .NET 运行时。{}",
+                if stderr.is_empty() {
+                    String::new()
+                } else {
+                    format!(" 错误输出: {}", stderr)
+                }
+            )));
+        }
+
+        if let Some(major) = required_runtime {
+            let runtimes = String::from_utf8_lossy(&output.stdout);
+            let expected_prefix = format!("Microsoft.NETCore.App {}.", major);
+            if !runtimes.lines().any(|line| line.contains(&expected_prefix)) {
+                return Err(AppError::ProcessError(format!(
+                    "当前 TShock 版本需要 .NET {} 运行时，但服务器上未找到该版本。请安装 `dotnet-runtime-{}.0` 后再启动。",
+                    major, major
+                )));
+            }
+        } else if launch_mode == "direct" {
+            tracing::warn!(
+                version_dir = %version_dir.display(),
+                "Runtime config not found; proceeding with direct launch because `dotnet --list-runtimes` is available"
+            );
+        }
+
+        Ok(())
+    }
+
+    fn detect_required_runtime_major(version_dir: &Path) -> Option<u32> {
+        let runtimeconfig_names = [
+            "TShock.Server.runtimeconfig.json",
+            "TerrariaServer.runtimeconfig.json",
+        ];
+
+        for name in runtimeconfig_names {
+            let path = version_dir.join(name);
+            if !path.exists() {
+                continue;
+            }
+
+            let content = std::fs::read_to_string(&path).ok()?;
+            let json: Value = serde_json::from_str(&content).ok()?;
+            let runtime_options = json.get("runtimeOptions")?;
+
+            if let Some(version) = runtime_options
+                .get("framework")
+                .and_then(|framework| framework.get("version"))
+                .and_then(|version| version.as_str())
+            {
+                return version.split('.').next()?.parse::<u32>().ok();
+            }
+
+            if let Some(version) = runtime_options
+                .get("frameworks")
+                .and_then(|frameworks| frameworks.as_array())
+                .and_then(|frameworks| frameworks.iter().find_map(|framework| {
+                    framework
+                        .get("version")
+                        .and_then(|version| version.as_str())
+                }))
+            {
+                return version.split('.').next()?.parse::<u32>().ok();
+            }
+        }
+
+        None
     }
 }
