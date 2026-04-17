@@ -53,14 +53,18 @@ impl ProcessManager {
             AppError::ProcessError(format!("Failed to create config directory: {}", e))
         })?;
 
-        // Detect TShock executable: self-contained binary (v6+) or DLL (v5 and earlier)
+        // Detect launch mode.
+        // Many .NET releases ship both an apphost binary and a DLL. If the DLL exists,
+        // prefer `dotnet TShock.Server.dll`; only run the bare binary when no DLL is present.
         let self_contained_bin = format!("{}/TShock.Server", version_path);
         let dll_path = format!("{}/TShock.Server.dll", version_path);
 
-        let (executable, is_self_contained) = if std::path::Path::new(&self_contained_bin).exists() {
-            (self_contained_bin.clone(), true)
-        } else if std::path::Path::new(&dll_path).exists() {
-            (dll_path.clone(), false)
+        let version_dir = Path::new(version_path);
+        let is_self_contained = crate::services::VersionManager::is_self_contained(version_dir);
+        let (executable, launch_mode) = if std::path::Path::new(&dll_path).exists() {
+            (dll_path.clone(), "dotnet")
+        } else if is_self_contained && std::path::Path::new(&self_contained_bin).exists() {
+            (self_contained_bin.clone(), "direct")
         } else {
             let dir_contents = std::fs::read_dir(version_path)
                 .map(|entries| {
@@ -86,7 +90,7 @@ impl ProcessManager {
         tracing::info!(
             server_id = %server_id,
             executable = %executable,
-            is_self_contained = is_self_contained,
+            launch_mode = launch_mode,
             config_path = %config_path,
             port = port,
             max_players = max_players,
@@ -100,8 +104,8 @@ impl ProcessManager {
         let logs_dir = server_dir.join("logs");
 
         // Build command based on executable type
-        let mut cmd = if is_self_contained {
-            // v6+: self-contained binary, run directly
+        let mut cmd = if launch_mode == "direct" {
+            // Self-contained binary, run directly
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -114,7 +118,7 @@ impl ProcessManager {
             let c = tokio::process::Command::new(&executable);
             c
         } else {
-            // v5 and earlier: run via dotnet runtime
+            // Framework-dependent .NET app: run via dotnet runtime
             let mut c = tokio::process::Command::new("dotnet");
             c.arg(&executable);
             c
