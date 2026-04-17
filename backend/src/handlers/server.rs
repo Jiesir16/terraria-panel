@@ -424,6 +424,14 @@ pub async fn start_server(
             AppError::NotFound(format!("TShock version {} not found", tshock_version))
         })?;
 
+    tracing::info!(
+        server_id = %id,
+        version = %tshock_version,
+        resolved_path = %version_path.display(),
+        dll_exists = version_path.join("TShock.Server.dll").exists(),
+        "Resolved TShock version path"
+    );
+
     let server_dir = state
         .config
         .server

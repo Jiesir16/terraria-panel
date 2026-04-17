@@ -49,10 +49,27 @@ impl ProcessManager {
         // Check if TShock executable exists
         let tshock_dll = format!("{}/TShock.Server.dll", version_path);
         if !std::path::Path::new(&tshock_dll).exists() {
-            tracing::error!(server_id = %server_id, path = %tshock_dll, "TShock executable not found");
+            // Log directory contents for diagnostics
+            let dir_contents = std::fs::read_dir(version_path)
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .map(|e| e.file_name().to_string_lossy().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_else(|_| "UNREADABLE".to_string());
+            tracing::error!(
+                server_id = %server_id,
+                expected_path = %tshock_dll,
+                version_dir = %version_path,
+                dir_contents = %dir_contents,
+                cwd = %std::env::current_dir().unwrap_or_default().display(),
+                "TShock executable not found"
+            );
             return Err(AppError::NotFound(format!(
-                "TShock executable not found at {}",
-                tshock_dll
+                "TShock.Server.dll 未找到，请检查版本 {} 是否正确安装。目录内容: [{}]",
+                version_path, dir_contents
             )));
         }
 

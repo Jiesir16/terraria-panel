@@ -420,38 +420,38 @@ impl VersionManager {
         if !path.exists() {
             return None;
         }
-        // If TShock.Server.dll is directly in the version dir, return it.
-        if path.join("TShock.Server.dll").exists() {
-            return Some(path);
-        }
-        // Otherwise search one level down for a nested directory containing the DLL
-        // (handles already-downloaded zips that weren't flattened).
-        if let Ok(entries) = std::fs::read_dir(&path) {
-            for entry in entries.flatten() {
-                let sub = entry.path();
-                if sub.is_dir() && sub.join("TShock.Server.dll").exists() {
-                    return Some(sub);
-                }
-            }
+        // Return the directory containing TShock.Server.dll (recursive search up to depth 5)
+        if let Some(dll_dir) = Self::find_dll_dir(&path, 5) {
+            return Some(dll_dir);
         }
         // Fallback: return the base path (for Mono-based or unknown layouts)
+        tracing::warn!(version = %version, path = %path.display(), "TShock.Server.dll not found in version directory tree");
         Some(path)
     }
 
-    pub fn is_dotnet_version(&self, version_path: &Path) -> bool {
-        if version_path.join("TShock.Server.dll").exists() {
-            return true;
+    /// Recursively search for TShock.Server.dll, returning the directory that contains it.
+    fn find_dll_dir(dir: &Path, max_depth: u32) -> Option<PathBuf> {
+        if dir.join("TShock.Server.dll").exists() {
+            return Some(dir.to_path_buf());
         }
-        // Check one level down
-        if let Ok(entries) = std::fs::read_dir(version_path) {
+        if max_depth == 0 {
+            return None;
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let sub = entry.path();
-                if sub.is_dir() && sub.join("TShock.Server.dll").exists() {
-                    return true;
+                if sub.is_dir() {
+                    if let Some(found) = Self::find_dll_dir(&sub, max_depth - 1) {
+                        return Some(found);
+                    }
                 }
             }
         }
-        false
+        None
+    }
+
+    pub fn is_dotnet_version(&self, version_path: &Path) -> bool {
+        Self::find_dll_dir(version_path, 5).is_some()
     }
 
     fn get_dir_size(&self, path: &Path) -> Result<u64, AppError> {

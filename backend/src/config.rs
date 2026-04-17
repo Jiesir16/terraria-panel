@@ -52,11 +52,35 @@ impl Config {
         let path = std::env::var("TERRARIA_CONSOLE_CONFIG")
             .unwrap_or_else(|_| "config.toml".to_string());
 
-        if std::path::Path::new(&path).exists() {
-            Self::from_file(&path)
+        let mut config = if std::path::Path::new(&path).exists() {
+            Self::from_file(&path)?
         } else {
-            Ok(Self::default())
+            Self::default()
+        };
+
+        // Canonicalize paths to absolute — avoids breakage when child
+        // processes or different code paths resolve relative paths from
+        // varying working directories.
+        config.server.data_dir = Self::ensure_absolute(&config.server.data_dir);
+        config.server.log_dir = Self::ensure_absolute(&config.server.log_dir);
+        config.server.frontend_dir = Self::ensure_absolute(&config.server.frontend_dir);
+
+        Ok(config)
+    }
+
+    /// Convert a potentially relative path to absolute based on the current
+    /// working directory.  Creates the directory first so `canonicalize` works.
+    fn ensure_absolute(p: &PathBuf) -> PathBuf {
+        if p.is_absolute() {
+            return p.clone();
         }
+        let _ = std::fs::create_dir_all(p);
+        std::fs::canonicalize(p).unwrap_or_else(|_| {
+            // fallback: manually prepend cwd
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(p)
+        })
     }
 }
 
