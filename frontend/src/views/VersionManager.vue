@@ -75,7 +75,9 @@
                 text
                 type="error"
                 size="small"
-                @click="handleDeleteVersion(version.version)"
+                :loading="deletingVersion === version.version"
+                :disabled="deletingVersion !== null"
+                @click="confirmDeleteVersion(version.version, version.name)"
               >
                 删除
               </n-button>
@@ -149,12 +151,13 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { NSpin, NButton, NTag, NInput } from 'naive-ui'
+import { NSpin, NButton, NTag, NInput, useDialog } from 'naive-ui'
 import { versionApi } from '../api/version'
 import type { VersionInfo, LocalVersion } from '../api/version'
 import { useNotification } from '../composables/useNotification'
 
 const notification = useNotification()
+const dialog = useDialog()
 
 const downloadedLoading = ref(false)
 const availableLoading = ref(false)
@@ -162,6 +165,7 @@ const loadingMore = ref(false)
 const downloadedVersions = ref<LocalVersion[]>([])
 const availableVersions = ref<VersionInfo[]>([])
 const downloadingVersion = ref<string | null>(null)
+const deletingVersion = ref<string | null>(null)
 const availablePage = ref(1)
 const perPage = 10
 const totalAvailable = ref(0)
@@ -276,16 +280,30 @@ async function handleDownloadVersion(version: VersionInfo) {
   }
 }
 
+function confirmDeleteVersion(version: string, name: string) {
+  dialog.warning({
+    title: '确认删除',
+    content: `确定要删除版本 ${name} (${version}) 吗？此操作不可恢复。`,
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: () => handleDeleteVersion(version)
+  })
+}
+
 async function handleDeleteVersion(version: string) {
+  deletingVersion.value = version
   try {
     await versionApi.delete(version)
     notification.success('版本已删除', '')
-    loadDownloadedVersions()
+    // Remove from local list immediately (no need to re-fetch)
+    downloadedVersions.value = downloadedVersions.value.filter(v => v.version !== version)
     // Update the available list too
     const found = availableVersions.value.find(v => v.version === version)
     if (found) found.downloaded = false
   } catch (error: any) {
     notification.error('删除失败', error?.response?.data?.message || '')
+  } finally {
+    deletingVersion.value = null
   }
 }
 

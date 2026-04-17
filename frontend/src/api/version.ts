@@ -37,7 +37,9 @@ export const versionApi = {
     }),
 
   download: (tagName: string, downloadUrl: string) =>
-    api.post('/versions/download', { tag_name: tagName, download_url: downloadUrl }),
+    api.post('/versions/download', { tag_name: tagName, download_url: downloadUrl }, {
+      timeout: 600000 // 10 minutes for large downloads
+    }),
 
   delete: (version: string) =>
     api.delete(`/versions/${version}`),
