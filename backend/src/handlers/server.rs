@@ -424,11 +424,14 @@ pub async fn start_server(
             AppError::NotFound(format!("TShock version {} not found", tshock_version))
         })?;
 
+    let has_self_contained = version_path.join("TShock.Server").exists();
+    let has_dll = version_path.join("TShock.Server.dll").exists();
     tracing::info!(
         server_id = %id,
         version = %tshock_version,
         resolved_path = %version_path.display(),
-        dll_exists = version_path.join("TShock.Server.dll").exists(),
+        has_self_contained = has_self_contained,
+        has_dll = has_dll,
         "Resolved TShock version path"
     );
 

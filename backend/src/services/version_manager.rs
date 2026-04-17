@@ -320,11 +320,11 @@ impl VersionManager {
 
         if version_dir.exists() {
             // If there are leftover unextracted archives, try to extract them now
-            if Self::find_dll_dir(&version_dir, 5).is_none() {
+            if Self::find_tshock_dir(&version_dir, 5).is_none() {
                 tracing::info!(version = %tag_name, "Version dir exists but DLL not found, attempting re-extraction");
                 self.try_extract_existing_archives(&version_dir)?;
             }
-            if Self::find_dll_dir(&version_dir, 5).is_some() {
+            if Self::find_tshock_dir(&version_dir, 5).is_some() {
                 return Ok(version_dir);
             }
             // Still nothing — remove and re-download
@@ -642,7 +642,7 @@ impl VersionManager {
         }
 
         // If there are leftover unextracted archives, extract them first
-        if Self::find_dll_dir(&path, 5).is_none() {
+        if Self::find_tshock_dir(&path, 5).is_none() {
             tracing::info!(version = %version, "DLL not found, checking for unextracted archives");
             let mgr = VersionManager {
                 versions_dir: self.versions_dir.clone(),
@@ -651,16 +651,23 @@ impl VersionManager {
             let _ = mgr.try_extract_existing_archives(&path);
         }
 
-        if let Some(dll_dir) = Self::find_dll_dir(&path, 5) {
-            return Some(dll_dir);
+        if let Some(tshock_dir) = Self::find_tshock_dir(&path, 5) {
+            return Some(tshock_dir);
         }
 
-        tracing::warn!(version = %version, path = %path.display(), "TShock.Server.dll not found in version directory tree");
+        tracing::warn!(version = %version, path = %path.display(), "TShock executable not found in version directory tree");
         Some(path)
     }
 
-    /// Recursively search for TShock.Server.dll, returning the directory that contains it.
-    fn find_dll_dir(dir: &Path, max_depth: u32) -> Option<PathBuf> {
+    /// Recursively search for TShock executable, returning the directory that contains it.
+    /// Supports both old format (TShock.Server.dll) and new v6+ format (TShock.Server binary).
+    fn find_tshock_dir(dir: &Path, max_depth: u32) -> Option<PathBuf> {
+        // Check for new-style self-contained binary (v6+): "TShock.Server" without extension
+        let self_contained = dir.join("TShock.Server");
+        if self_contained.exists() && self_contained.is_file() {
+            return Some(dir.to_path_buf());
+        }
+        // Check for old-style DLL: "TShock.Server.dll" (needs dotnet runtime)
         if dir.join("TShock.Server.dll").exists() {
             return Some(dir.to_path_buf());
         }
@@ -671,7 +678,7 @@ impl VersionManager {
             for entry in entries.flatten() {
                 let sub = entry.path();
                 if sub.is_dir() {
-                    if let Some(found) = Self::find_dll_dir(&sub, max_depth - 1) {
+                    if let Some(found) = Self::find_tshock_dir(&sub, max_depth - 1) {
                         return Some(found);
                     }
                 }
@@ -680,8 +687,16 @@ impl VersionManager {
         None
     }
 
+    /// Check if TShock executable exists (either .dll or self-contained binary).
     pub fn is_dotnet_version(&self, version_path: &Path) -> bool {
-        Self::find_dll_dir(version_path, 5).is_some()
+        Self::find_tshock_dir(version_path, 5).is_some()
+    }
+
+    /// Determine the executable type in a TShock directory.
+    /// Returns `true` if it's a self-contained binary (v6+), `false` if it's a DLL needing dotnet.
+    pub fn is_self_contained(version_path: &Path) -> bool {
+        let binary = version_path.join("TShock.Server");
+        binary.exists() && binary.is_file() && !version_path.join("TShock.Server.dll").exists()
     }
 
     fn get_dir_size(&self, path: &Path) -> Result<u64, AppError> {

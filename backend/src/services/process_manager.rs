@@ -46,10 +46,15 @@ impl ProcessManager {
             return Err(AppError::Conflict("Server already running".to_string()));
         }
 
-        // Check if TShock executable exists
-        let tshock_dll = format!("{}/TShock.Server.dll", version_path);
-        if !std::path::Path::new(&tshock_dll).exists() {
-            // Log directory contents for diagnostics
+        // Detect TShock executable: self-contained binary (v6+) or DLL (v5 and earlier)
+        let self_contained_bin = format!("{}/TShock.Server", version_path);
+        let dll_path = format!("{}/TShock.Server.dll", version_path);
+
+        let (executable, is_self_contained) = if std::path::Path::new(&self_contained_bin).exists() {
+            (self_contained_bin.clone(), true)
+        } else if std::path::Path::new(&dll_path).exists() {
+            (dll_path.clone(), false)
+        } else {
             let dir_contents = std::fs::read_dir(version_path)
                 .map(|entries| {
                     entries
@@ -61,31 +66,49 @@ impl ProcessManager {
                 .unwrap_or_else(|_| "UNREADABLE".to_string());
             tracing::error!(
                 server_id = %server_id,
-                expected_path = %tshock_dll,
                 version_dir = %version_path,
                 dir_contents = %dir_contents,
-                cwd = %std::env::current_dir().unwrap_or_default().display(),
-                "TShock executable not found"
+                "TShock executable not found (checked TShock.Server and TShock.Server.dll)"
             );
             return Err(AppError::NotFound(format!(
-                "TShock.Server.dll 未找到，请检查版本 {} 是否正确安装。目录内容: [{}]",
+                "TShock 可执行文件未找到，请检查版本 {} 是否正确安装。目录内容: [{}]",
                 version_path, dir_contents
             )));
-        }
+        };
 
-        // Build TShock command
         tracing::info!(
             server_id = %server_id,
-            tshock_dll = %tshock_dll,
+            executable = %executable,
+            is_self_contained = is_self_contained,
             config_path = %config_path,
             port = port,
             max_players = max_players,
             "Spawning TShock process"
         );
 
-        let mut cmd = tokio::process::Command::new("dotnet");
-        cmd.arg(&tshock_dll)
-            .arg("-configpath")
+        // Build command based on executable type
+        let mut cmd = if is_self_contained {
+            // v6+: self-contained binary, run directly
+            // Ensure execute permission on Linux
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(metadata) = std::fs::metadata(&executable) {
+                    let mut perms = metadata.permissions();
+                    perms.set_mode(perms.mode() | 0o755);
+                    let _ = std::fs::set_permissions(&executable, perms);
+                }
+            }
+            let mut c = tokio::process::Command::new(&executable);
+            c
+        } else {
+            // v5 and earlier: run via dotnet runtime
+            let mut c = tokio::process::Command::new("dotnet");
+            c.arg(&executable);
+            c
+        };
+
+        cmd.arg("-configpath")
             .arg(config_path)
             .arg("-port")
             .arg(port.to_string())
