@@ -30,6 +30,8 @@ pub async fn list_saves(
     State(state): State<AppState>,
     _auth: Auth,
 ) -> Result<Json<Vec<SaveInfo>>, AppError> {
+    tracing::debug!("Listing saves");
+
     let db = state.db.lock().map_err(|_| {
         AppError::InternalServerError("Failed to acquire database lock".to_string())
     })?;
@@ -53,6 +55,7 @@ pub async fn list_saves(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
+    tracing::debug!(count = saves.len(), "Listed saves");
     Ok(Json(saves))
 }
 
@@ -61,6 +64,8 @@ pub async fn upload_save(
     auth: Auth,
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info!(user = %auth.username, "Uploading save file");
+
     if !auth.is_operator_or_admin() {
         return Err(AppError::Forbidden(
             "Only operators and admins can upload saves".to_string(),
@@ -79,6 +84,7 @@ pub async fn upload_save(
 
         // Only allow .wld files
         if !filename.ends_with(".wld") {
+            tracing::warn!(filename = %filename, "Save upload rejected: invalid file extension");
             return Err(AppError::BadRequest(
                 "Only .wld files are allowed".to_string(),
             ));
@@ -92,6 +98,7 @@ pub async fn upload_save(
 
         // Check file size (max 500MB)
         if data.len() > 500 * 1024 * 1024 {
+            tracing::warn!(filename = %filename, size = data.len(), "Save upload rejected: file too large");
             return Err(AppError::BadRequest(
                 "File size exceeds 500MB limit".to_string(),
             ));
@@ -99,6 +106,8 @@ pub async fn upload_save(
 
         let save_id = Uuid::new_v4().to_string();
         let file_size = data.len() as u64;
+
+        tracing::info!(filename = %filename, size = file_size, save_id = %save_id, "Writing save file");
 
         state
             .save_manager
@@ -128,6 +137,8 @@ pub async fn upload_save(
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
     }
 
+    tracing::info!(user = %auth.username, "Save uploaded successfully");
+
     Ok(Json(json!({
         "success": true,
         "message": "Save uploaded successfully"
@@ -139,6 +150,8 @@ pub async fn import_save(
     auth: Auth,
     Path((save_id, server_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info!(user = %auth.username, save_id = %save_id, server_id = %server_id, "Importing save to server");
+
     if !auth.is_operator_or_admin() {
         return Err(AppError::Forbidden(
             "Only operators and admins can import saves".to_string(),
@@ -159,10 +172,14 @@ pub async fn import_save(
 
     drop(db);
 
+    tracing::debug!(save_id = %save_id, file_path = %file_path, server_id = %server_id, "Copying save file to server");
+
     state
         .save_manager
         .import_save(&file_path, &server_id)
         .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+
+    tracing::info!(save_id = %save_id, server_id = %server_id, "Save imported successfully");
 
     Ok(Json(json!({
         "success": true,
@@ -175,6 +192,8 @@ pub async fn download_save(
     _auth: Auth,
     Path(save_id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
+    tracing::info!(save_id = %save_id, "Downloading save file");
+
     let db = state.db.lock().map_err(|_| {
         AppError::InternalServerError("Failed to acquire database lock".to_string())
     })?;
@@ -189,6 +208,8 @@ pub async fn download_save(
 
     drop(db);
 
+    tracing::debug!(save_id = %save_id, file_path = %file_path, "Reading save file from disk");
+
     let file = std::fs::read(&file_path)
         .map_err(|e| AppError::FileError(e.to_string()))?;
 
@@ -197,6 +218,8 @@ pub async fn download_save(
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
+
+    tracing::info!(save_id = %save_id, size = file.len(), "Save file downloaded");
 
     Ok((
         StatusCode::OK,
@@ -210,6 +233,8 @@ pub async fn delete_save(
     auth: Auth,
     Path(save_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info!(user = %auth.username, save_id = %save_id, "Deleting save");
+
     if !auth.is_operator_or_admin() {
         return Err(AppError::Forbidden(
             "Only operators and admins can delete saves".to_string(),
@@ -235,9 +260,12 @@ pub async fn delete_save(
 
     // Delete file
     if std::path::Path::new(&file_path).exists() {
+        tracing::debug!(save_id = %save_id, file_path = %file_path, "Removing save file from disk");
         std::fs::remove_file(&file_path)
             .map_err(|e| AppError::FileError(e.to_string()))?;
     }
+
+    tracing::info!(save_id = %save_id, "Save deleted successfully");
 
     Ok(Json(json!({
         "success": true,
@@ -250,6 +278,8 @@ pub async fn backup_server(
     auth: Auth,
     Path(server_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info!(user = %auth.username, server_id = %server_id, "Backing up server world");
+
     if !auth.is_operator_or_admin() {
         return Err(AppError::Forbidden(
             "Only operators and admins can backup servers".to_string(),
@@ -271,16 +301,21 @@ pub async fn backup_server(
     drop(db);
 
     if let Some(world_name) = world_name {
+        tracing::info!(server_id = %server_id, world_name = %world_name, "Creating backup of world");
+
         state
             .save_manager
             .backup_server(&server_id, &world_name)
             .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+
+        tracing::info!(server_id = %server_id, world_name = %world_name, "Server backed up successfully");
 
         Ok(Json(json!({
             "success": true,
             "message": "Server backed up successfully"
         })))
     } else {
+        tracing::warn!(server_id = %server_id, "Backup failed: no world name set");
         Err(AppError::BadRequest(
             "Server has no world name set".to_string(),
         ))

@@ -86,18 +86,30 @@ impl VersionManager {
     pub async fn fetch_available(&self) -> Result<Vec<VersionInfo>, AppError> {
         let api_url = "https://api.github.com/repos/Pryaxis/TShock/releases";
 
+        tracing::info!(url = %api_url, "Fetching TShock releases from GitHub API");
+
         let client = reqwest::Client::new();
         let response = client
             .get(api_url)
             .header("User-Agent", "terraria-console")
             .send()
             .await
-            .map_err(|e| AppError::ProcessError(format!("Failed to fetch releases: {}", e)))?;
+            .map_err(|e| {
+                tracing::error!(error = %e, "HTTP request to GitHub API failed");
+                AppError::ProcessError(format!("Failed to fetch releases: {}", e))
+            })?;
+
+        tracing::debug!(status = %response.status(), "GitHub API response received");
 
         let releases: Vec<GitHubRelease> = response
             .json()
             .await
-            .map_err(|e| AppError::ProcessError(format!("Failed to parse releases: {}", e)))?;
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to parse GitHub API response JSON");
+                AppError::ProcessError(format!("Failed to parse releases: {}", e))
+            })?;
+
+        tracing::info!(releases_count = releases.len(), "Parsed GitHub releases");
 
         let local_versions = self.list_local().unwrap_or_default();
         let local_version_set: std::collections::HashSet<String> =
@@ -136,8 +148,11 @@ impl VersionManager {
         let version_dir = self.versions_dir.join(tag_name);
 
         if version_dir.exists() {
+            tracing::info!(version = %tag_name, "Version already downloaded, skipping");
             return Ok(version_dir);
         }
+
+        tracing::info!(version = %tag_name, url = %download_url, "Starting version download");
 
         std::fs::create_dir_all(&version_dir)
             .map_err(|e| AppError::FileError(format!("Failed to create version directory: {}", e)))?;
@@ -148,12 +163,22 @@ impl VersionManager {
             .header("User-Agent", "terraria-console")
             .send()
             .await
-            .map_err(|e| AppError::ProcessError(format!("Failed to download: {}", e)))?;
+            .map_err(|e| {
+                tracing::error!(version = %tag_name, error = %e, "Download HTTP request failed");
+                AppError::ProcessError(format!("Failed to download: {}", e))
+            })?;
+
+        tracing::debug!(version = %tag_name, status = %response.status(), "Download response received");
 
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| AppError::ProcessError(format!("Failed to read response: {}", e)))?;
+            .map_err(|e| {
+                tracing::error!(version = %tag_name, error = %e, "Failed to read download response body");
+                AppError::ProcessError(format!("Failed to read response: {}", e))
+            })?;
+
+        tracing::info!(version = %tag_name, size = bytes.len(), "Download complete, writing to disk");
 
         let zip_path = version_dir.join("release.zip");
 
@@ -161,10 +186,13 @@ impl VersionManager {
             .await
             .map_err(|e| AppError::FileError(format!("Failed to write zip file: {}", e)))?;
 
+        tracing::info!(version = %tag_name, "Extracting zip archive");
         self.extract_zip(&zip_path, &version_dir)?;
 
         std::fs::remove_file(&zip_path)
             .map_err(|e| AppError::FileError(format!("Failed to delete zip: {}", e)))?;
+
+        tracing::info!(version = %tag_name, path = %version_dir.display(), "Version downloaded and extracted successfully");
 
         Ok(version_dir)
     }
@@ -207,11 +235,16 @@ impl VersionManager {
         let version_dir = self.versions_dir.join(version);
 
         if !version_dir.exists() {
+            tracing::warn!(version = %version, "Cannot delete: version not found");
             return Err(AppError::NotFound(format!("Version {} not found", version)));
         }
 
+        tracing::info!(version = %version, path = %version_dir.display(), "Deleting version directory");
         std::fs::remove_dir_all(&version_dir)
-            .map_err(|e| AppError::FileError(format!("Failed to delete version: {}", e)))
+            .map_err(|e| AppError::FileError(format!("Failed to delete version: {}", e)))?;
+
+        tracing::info!(version = %version, "Version deleted successfully");
+        Ok(())
     }
 
     pub fn get_version_path(&self, version: &str) -> Option<PathBuf> {

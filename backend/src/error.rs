@@ -67,6 +67,20 @@ impl IntoResponse for AppError {
         let status = self.status();
         let message = self.message();
 
+        // Log all errors so they appear in server-side tracing output
+        match &self {
+            AppError::BadRequest(_) => tracing::warn!(status = %status, error = %message, "Bad request"),
+            AppError::Unauthorized(_) | AppError::InvalidToken => {
+                tracing::warn!(status = %status, error = %message, "Unauthorized access attempt")
+            }
+            AppError::Forbidden(_) => tracing::warn!(status = %status, error = %message, "Forbidden access attempt"),
+            AppError::NotFound(_) => tracing::warn!(status = %status, error = %message, "Resource not found"),
+            AppError::Conflict(_) => tracing::warn!(status = %status, error = %message, "Resource conflict"),
+            AppError::InternalServerError(_) | AppError::DatabaseError(_) | AppError::FileError(_) | AppError::ProcessError(_) => {
+                tracing::error!(status = %status, error = %message, "Internal server error")
+            }
+        }
+
         let body = Json(json!({
             "error": message,
             "status": status.as_u16()

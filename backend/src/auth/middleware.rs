@@ -31,25 +31,42 @@ where
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let method = parts.method.clone();
+        let uri = parts.uri.clone();
+
         // Extract Authorization header manually
         let auth_header = parts
             .headers
             .get("authorization")
             .and_then(|h| h.to_str().ok())
-            .ok_or_else(|| AppError::Unauthorized("Missing authorization header".to_string()))?;
+            .ok_or_else(|| {
+                tracing::warn!(method = %method, uri = %uri, "Auth failed: missing authorization header");
+                AppError::Unauthorized("Missing authorization header".to_string())
+            })?;
 
         // Extract Bearer token
         let token = auth_header
             .strip_prefix("Bearer ")
-            .ok_or_else(|| AppError::Unauthorized("Invalid authorization format".to_string()))?;
+            .ok_or_else(|| {
+                tracing::warn!(method = %method, uri = %uri, "Auth failed: invalid authorization format");
+                AppError::Unauthorized("Invalid authorization format".to_string())
+            })?;
 
         let token_manager = parts
             .extensions
             .get::<std::sync::Arc<super::TokenManager>>()
             .cloned()
-            .ok_or_else(|| AppError::InternalServerError("Token manager not found".to_string()))?;
+            .ok_or_else(|| {
+                tracing::error!("Auth failed: token manager not found in extensions");
+                AppError::InternalServerError("Token manager not found".to_string())
+            })?;
 
-        let claims = token_manager.verify(token)?;
+        let claims = token_manager.verify(token).map_err(|e| {
+            tracing::warn!(method = %method, uri = %uri, "Auth failed: token verification error");
+            e
+        })?;
+
+        tracing::debug!(user = %claims.username, role = %claims.role, method = %method, uri = %uri, "Auth successful");
 
         Ok(Auth {
             user_id: claims.user_id,

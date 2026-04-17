@@ -118,7 +118,10 @@ pub async fn create_user(
     auth: Auth,
     Json(req): Json<crate::models::RegisterRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info!(admin = %auth.username, new_user = %req.username, "Admin creating new user");
+
     if !auth.is_admin() {
+        tracing::warn!(user = %auth.username, role = %auth.role, "Create user denied: insufficient permissions");
         return Err(AppError::Forbidden(
             "Only administrators can create users".to_string(),
         ));
@@ -144,6 +147,7 @@ pub async fn create_user(
         .unwrap_or(false);
 
     if exists {
+        tracing::warn!(new_user = %req.username, "User creation failed: username already exists");
         return Err(AppError::Conflict(
             "Username already exists".to_string(),
         ));
@@ -160,6 +164,8 @@ pub async fn create_user(
     )
     .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
+    tracing::info!(admin = %auth.username, new_user = %req.username, user_id = %user_id, "User created successfully");
+
     Ok(Json(json!({
         "success": true,
         "message": "User created successfully"
@@ -172,7 +178,10 @@ pub async fn update_user(
     axum::extract::Path(user_id): axum::extract::Path<String>,
     Json(req): Json<UpdateUserRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info!(admin = %auth.username, target_user_id = %user_id, "Admin updating user");
+
     if !auth.is_admin() {
+        tracing::warn!(user = %auth.username, role = %auth.role, "Update user denied: insufficient permissions");
         return Err(AppError::Forbidden(
             "Only administrators can update users".to_string(),
         ));
@@ -185,6 +194,7 @@ pub async fn update_user(
     let now = Utc::now().to_rfc3339();
 
     if let Some(username) = &req.username {
+        tracing::debug!(target_user_id = %user_id, new_username = %username, "Updating username");
         db.execute(
             "UPDATE users SET username = ?1, updated_at = ?2 WHERE id = ?3",
             params![username, now, user_id],
@@ -192,8 +202,9 @@ pub async fn update_user(
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
     }
 
-    if let Some(password) = &req.password {
-        let password_hash = crate::auth::hash_password(password)?;
+    if let Some(_password) = &req.password {
+        tracing::debug!(target_user_id = %user_id, "Updating password");
+        let password_hash = crate::auth::hash_password(_password)?;
         db.execute(
             "UPDATE users SET password_hash = ?1, updated_at = ?2 WHERE id = ?3",
             params![password_hash, now, user_id],
@@ -202,12 +213,15 @@ pub async fn update_user(
     }
 
     if let Some(role) = &req.role {
+        tracing::debug!(target_user_id = %user_id, new_role = %role, "Updating role");
         db.execute(
             "UPDATE users SET role = ?1, updated_at = ?2 WHERE id = ?3",
             params![role, now, user_id],
         )
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
     }
+
+    tracing::info!(admin = %auth.username, target_user_id = %user_id, "User updated successfully");
 
     Ok(Json(json!({
         "success": true,
@@ -220,7 +234,10 @@ pub async fn delete_user(
     auth: Auth,
     axum::extract::Path(user_id): axum::extract::Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info!(admin = %auth.username, target_user_id = %user_id, "Admin deleting user");
+
     if !auth.is_admin() {
+        tracing::warn!(user = %auth.username, role = %auth.role, "Delete user denied: insufficient permissions");
         return Err(AppError::Forbidden(
             "Only administrators can delete users".to_string(),
         ));
@@ -228,6 +245,7 @@ pub async fn delete_user(
 
     // Prevent deleting the current user
     if user_id == auth.user_id {
+        tracing::warn!(admin = %auth.username, "Delete user denied: cannot delete own account");
         return Err(AppError::BadRequest(
             "Cannot delete your own user account".to_string(),
         ));
@@ -239,6 +257,8 @@ pub async fn delete_user(
 
     db.execute("DELETE FROM users WHERE id = ?1", params![user_id])
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+    tracing::info!(admin = %auth.username, target_user_id = %user_id, "User deleted successfully");
 
     Ok(Json(json!({
         "success": true,

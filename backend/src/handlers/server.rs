@@ -18,6 +18,8 @@ pub async fn list_servers(
     State(state): State<AppState>,
     _auth: Auth,
 ) -> Result<Json<Vec<Server>>, AppError> {
+    tracing::debug!("Listing all servers");
+
     let db = state.db.lock().map_err(|_| {
         AppError::InternalServerError("Failed to acquire database lock".to_string())
     })?;
@@ -47,6 +49,7 @@ pub async fn list_servers(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
+    tracing::debug!(count = servers.len(), "Listed servers");
     Ok(Json(servers))
 }
 
@@ -55,7 +58,10 @@ pub async fn create_server(
     auth: Auth,
     Json(req): Json<CreateServerRequest>,
 ) -> Result<Json<Server>, AppError> {
+    tracing::info!(user = %auth.username, server_name = %req.name, "Creating new server");
+
     if !auth.is_operator_or_admin() {
+        tracing::warn!(user = %auth.username, role = %auth.role, "Create server denied: insufficient permissions");
         return Err(AppError::Forbidden(
             "Only operators and admins can create servers".to_string(),
         ));
@@ -93,6 +99,7 @@ pub async fn create_server(
 
     // Create server directories
     let server_dir = state.config.server.data_dir.join("servers").join(&server_id);
+    tracing::debug!(server_id = %server_id, path = %server_dir.display(), "Creating server directories");
     std::fs::create_dir_all(server_dir.join("world"))
         .map_err(|e| AppError::FileError(e.to_string()))?;
     std::fs::create_dir_all(server_dir.join("ServerPlugins"))
@@ -101,6 +108,15 @@ pub async fn create_server(
         .map_err(|e| AppError::FileError(e.to_string()))?;
     std::fs::create_dir_all(server_dir.join("tshock"))
         .map_err(|e| AppError::FileError(e.to_string()))?;
+
+    tracing::info!(
+        server_id = %server_id,
+        server_name = %req.name,
+        port = port,
+        version = %req.tshock_version,
+        user = %auth.username,
+        "Server created successfully"
+    );
 
     Ok(Json(Server {
         id: server_id,
@@ -259,7 +275,10 @@ pub async fn delete_server(
     auth: Auth,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info!(user = %auth.username, server_id = %id, "Deleting server");
+
     if !auth.is_admin() {
+        tracing::warn!(user = %auth.username, role = %auth.role, server_id = %id, "Delete server denied: insufficient permissions");
         return Err(AppError::Forbidden(
             "Only administrators can delete servers".to_string(),
         ));
@@ -275,9 +294,12 @@ pub async fn delete_server(
     // Delete server directory
     let server_dir = state.config.server.data_dir.join("servers").join(&id);
     if server_dir.exists() {
+        tracing::debug!(server_id = %id, path = %server_dir.display(), "Removing server directory");
         std::fs::remove_dir_all(server_dir)
             .map_err(|e| AppError::FileError(e.to_string()))?;
     }
+
+    tracing::info!(user = %auth.username, server_id = %id, "Server deleted successfully");
 
     Ok(Json(json!({
         "success": true,
@@ -290,7 +312,10 @@ pub async fn start_server(
     auth: Auth,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info!(user = %auth.username, server_id = %id, "Starting server");
+
     if !auth.is_operator_or_admin() {
+        tracing::warn!(user = %auth.username, role = %auth.role, server_id = %id, "Start server denied: insufficient permissions");
         return Err(AppError::Forbidden(
             "Only operators and admins can start servers".to_string(),
         ));
@@ -320,10 +345,22 @@ pub async fn start_server(
         // db (MutexGuard) drops here at end of block
     };
 
+    tracing::info!(
+        server_id = %id,
+        port = port,
+        max_players = max_players,
+        tshock_version = %tshock_version,
+        has_password = password.is_some(),
+        "Server config loaded, starting process"
+    );
+
     let version_path = state
         .version_manager
         .get_version_path(&tshock_version)
-        .ok_or_else(|| AppError::NotFound(format!("TShock version {} not found", tshock_version)))?;
+        .ok_or_else(|| {
+            tracing::error!(server_id = %id, version = %tshock_version, "TShock version not found locally");
+            AppError::NotFound(format!("TShock version {} not found", tshock_version))
+        })?;
 
     let config_path = state
         .config
@@ -332,6 +369,13 @@ pub async fn start_server(
         .join("servers")
         .join(&id)
         .join("tshock");
+
+    tracing::debug!(
+        server_id = %id,
+        version_path = %version_path.display(),
+        config_path = %config_path.display(),
+        "Launching TShock process"
+    );
 
     state
         .process_manager
@@ -359,6 +403,8 @@ pub async fn start_server(
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
     }
 
+    tracing::info!(user = %auth.username, server_id = %id, port = port, "Server started successfully");
+
     Ok(Json(json!({
         "success": true,
         "message": "Server started successfully"
@@ -370,7 +416,10 @@ pub async fn stop_server(
     auth: Auth,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info!(user = %auth.username, server_id = %id, "Stopping server");
+
     if !auth.is_operator_or_admin() {
+        tracing::warn!(user = %auth.username, role = %auth.role, server_id = %id, "Stop server denied: insufficient permissions");
         return Err(AppError::Forbidden(
             "Only operators and admins can stop servers".to_string(),
         ));
@@ -392,6 +441,8 @@ pub async fn stop_server(
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
     }
 
+    tracing::info!(user = %auth.username, server_id = %id, "Server stopped successfully");
+
     Ok(Json(json!({
         "success": true,
         "message": "Server stopped successfully"
@@ -403,7 +454,9 @@ pub async fn restart_server(
     auth: Auth,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info!(user = %auth.username, server_id = %id, "Restarting server");
     let _ = stop_server(State(state.clone()), auth.clone(), Path(id.clone())).await?;
+    tracing::debug!(server_id = %id, "Waiting 2s before restart");
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
     start_server(State(state), auth, Path(id)).await
 }
@@ -414,6 +467,8 @@ pub async fn send_command(
     Path(id): Path<String>,
     Json(req): Json<CommandRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info!(user = %auth.username, server_id = %id, command = %req.command, "Sending command to server");
+
     if !auth.is_operator_or_admin() {
         return Err(AppError::Forbidden(
             "Only operators and admins can send commands".to_string(),
@@ -421,6 +476,8 @@ pub async fn send_command(
     }
 
     state.process_manager.send_command(&id, &req.command).await?;
+
+    tracing::debug!(server_id = %id, command = %req.command, "Command sent successfully");
 
     Ok(Json(json!({
         "success": true,

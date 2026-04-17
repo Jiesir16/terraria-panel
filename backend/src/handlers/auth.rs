@@ -29,6 +29,8 @@ pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
+    tracing::info!(username = %req.username, "Login attempt");
+
     let db = state.db.lock().map_err(|_| {
         AppError::InternalServerError("Failed to acquire database lock".to_string())
     })?;
@@ -48,11 +50,13 @@ pub async fn login(
     );
 
     let (user_id, username, password_hash, role) = result.map_err(|_| {
+        tracing::warn!(username = %req.username, "Login failed: user not found");
         AppError::Unauthorized("Invalid username or password".to_string())
     })?;
 
     // Verify password
     if !verify_password(&req.password, &password_hash) {
+        tracing::warn!(username = %req.username, "Login failed: incorrect password");
         return Err(AppError::Unauthorized(
             "Invalid username or password".to_string(),
         ));
@@ -62,6 +66,8 @@ pub async fn login(
     let token = state
         .token_manager
         .generate(user_id.clone(), username.clone(), role.clone())?;
+
+    tracing::info!(username = %username, role = %role, "Login successful");
 
     Ok(Json(LoginResponse {
         token,
@@ -78,8 +84,11 @@ pub async fn register(
     auth: Auth,
     Json(req): Json<RegisterRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info!(operator = %auth.username, new_user = %req.username, "User registration attempt");
+
     // Only admin can register new users
     if !auth.is_admin() {
+        tracing::warn!(operator = %auth.username, role = %auth.role, "Registration denied: insufficient permissions");
         return Err(AppError::Forbidden(
             "Only administrators can register new users".to_string(),
         ));
@@ -105,6 +114,7 @@ pub async fn register(
         .unwrap_or(false);
 
     if exists {
+        tracing::warn!(new_user = %req.username, "Registration failed: username already exists");
         return Err(AppError::Conflict(
             "Username already exists".to_string(),
         ));
@@ -122,6 +132,8 @@ pub async fn register(
     )
     .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
+    tracing::info!(operator = %auth.username, new_user = %req.username, user_id = %user_id, "User registered successfully");
+
     Ok(Json(json!({
         "success": true,
         "message": "User registered successfully"
@@ -133,6 +145,8 @@ pub async fn change_password(
     auth: Auth,
     Json(req): Json<ChangePasswordRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info!(user = %auth.username, "Password change attempt");
+
     let db = state.db.lock().map_err(|_| {
         AppError::InternalServerError("Failed to acquire database lock".to_string())
     })?;
@@ -148,6 +162,7 @@ pub async fn change_password(
 
     // Verify old password
     if !verify_password(&req.old_password, &password_hash) {
+        tracing::warn!(user = %auth.username, "Password change failed: old password incorrect");
         return Err(AppError::Unauthorized(
             "Old password is incorrect".to_string(),
         ));
@@ -162,6 +177,8 @@ pub async fn change_password(
         params![new_hash, now, auth.user_id],
     )
     .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+    tracing::info!(user = %auth.username, "Password changed successfully");
 
     Ok(Json(json!({
         "success": true,

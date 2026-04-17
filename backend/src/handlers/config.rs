@@ -16,6 +16,8 @@ pub async fn get_config(
     _auth: Auth,
     Path(server_id): Path<String>,
 ) -> Result<Json<ServerConfig>, AppError> {
+    tracing::debug!(server_id = %server_id, "Reading server config");
+
     let config_path = state
         .config
         .server
@@ -26,6 +28,7 @@ pub async fn get_config(
         .join("config.json");
 
     if !config_path.exists() {
+        tracing::debug!(server_id = %server_id, "Config file not found, returning defaults");
         return Ok(Json(ServerConfig::default()));
     }
 
@@ -33,8 +36,12 @@ pub async fn get_config(
         .map_err(|e| AppError::FileError(e.to_string()))?;
 
     let config: ServerConfig = serde_json::from_str(&config_str)
-        .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+        .map_err(|e| {
+            tracing::error!(server_id = %server_id, error = %e, "Failed to parse config.json");
+            AppError::BadRequest(format!("Invalid JSON: {}", e))
+        })?;
 
+    tracing::debug!(server_id = %server_id, "Config loaded successfully");
     Ok(Json(config))
 }
 
@@ -44,6 +51,8 @@ pub async fn update_config(
     Path(server_id): Path<String>,
     Json(config): Json<ServerConfig>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info!(user = %auth.username, server_id = %server_id, "Updating server config");
+
     if !auth.is_operator_or_admin() {
         return Err(AppError::Forbidden(
             "Only operators and admins can update config".to_string(),
@@ -68,6 +77,8 @@ pub async fn update_config(
     std::fs::write(&config_path, config_json)
         .map_err(|e| AppError::FileError(e.to_string()))?;
 
+    tracing::info!(server_id = %server_id, path = %config_path.display(), "Config updated successfully");
+
     Ok(Json(json!({
         "success": true,
         "message": "Config updated successfully"
@@ -85,6 +96,8 @@ pub async fn import_config(
     Path(server_id): Path<String>,
     Json(config): Json<ServerConfig>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info!(user = %auth.username, server_id = %server_id, "Importing config");
+
     if !auth.is_operator_or_admin() {
         return Err(AppError::Forbidden(
             "Only operators and admins can import config".to_string(),
@@ -109,6 +122,8 @@ pub async fn import_config(
     std::fs::write(&config_path, config_json)
         .map_err(|e| AppError::FileError(e.to_string()))?;
 
+    tracing::info!(server_id = %server_id, "Config imported successfully");
+
     Ok(Json(json!({
         "success": true,
         "message": "Config imported successfully"
@@ -120,6 +135,8 @@ pub async fn export_config(
     _auth: Auth,
     Path(server_id): Path<String>,
 ) -> Result<Json<ServerConfig>, AppError> {
+    tracing::info!(server_id = %server_id, "Exporting server config");
+
     let config_path = state
         .config
         .server
@@ -130,6 +147,7 @@ pub async fn export_config(
         .join("config.json");
 
     if !config_path.exists() {
+        tracing::debug!(server_id = %server_id, "Config not found, exporting defaults");
         return Ok(Json(ServerConfig::default()));
     }
 
@@ -137,7 +155,11 @@ pub async fn export_config(
         .map_err(|e| AppError::FileError(e.to_string()))?;
 
     let config: ServerConfig = serde_json::from_str(&config_str)
-        .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+        .map_err(|e| {
+            tracing::error!(server_id = %server_id, error = %e, "Failed to parse config.json for export");
+            AppError::BadRequest(format!("Invalid JSON: {}", e))
+        })?;
 
+    tracing::info!(server_id = %server_id, "Config exported successfully");
     Ok(Json(config))
 }
