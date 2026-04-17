@@ -23,6 +23,26 @@ fn is_allowed_save_name(name: &str) -> bool {
     name.ends_with(".wld") || name.ends_with(".wld.bak") || name.ends_with(".bak")
 }
 
+fn normalize_world_filename(name: &str) -> String {
+    if name.ends_with(".wld") {
+        return name.to_string();
+    }
+
+    if name.ends_with(".wld.bak") {
+        return name.trim_end_matches(".bak").to_string();
+    }
+
+    if name.ends_with(".bak") {
+        let base = name.trim_end_matches(".bak");
+        if base.ends_with(".wld") {
+            return base.to_string();
+        }
+        return format!("{}.wld", base);
+    }
+
+    format!("{}.wld", name)
+}
+
 impl SaveManager {
     pub fn new(saves_dir: PathBuf, servers_dir: PathBuf) -> Self {
         Self {
@@ -100,11 +120,12 @@ impl SaveManager {
                 .map_err(|e| AppError::FileError(format!("Failed to create world directory: {}", e)))?;
         }
 
-        let dest_path = world_dir.join(target_name);
+        let normalized_name = normalize_world_filename(target_name);
+        let dest_path = world_dir.join(&normalized_name);
         std::fs::copy(&save_file_path, &dest_path)
             .map_err(|e| AppError::FileError(format!("Failed to copy save: {}", e)))?;
 
-        Ok(target_name.to_string())
+        Ok(normalized_name)
     }
 
     pub fn backup_server(

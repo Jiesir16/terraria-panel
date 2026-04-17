@@ -1,6 +1,7 @@
 use crate::error::AppError;
 use crate::models::ServerStatus;
 use std::collections::HashMap;
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
@@ -92,6 +93,12 @@ impl ProcessManager {
             "Spawning TShock process"
         );
 
+        let server_dir = Path::new(config_path)
+            .parent()
+            .ok_or_else(|| AppError::ProcessError("Invalid config path".to_string()))?;
+        let world_dir = server_dir.join("world");
+        let logs_dir = server_dir.join("logs");
+
         // Build command based on executable type
         let mut cmd = if is_self_contained {
             // v6+: self-contained binary, run directly
@@ -115,10 +122,15 @@ impl ProcessManager {
 
         cmd.arg("-configpath")
             .arg(config_path)
+            .arg("-worldpath")
+            .arg(&world_dir)
+            .arg("-logpath")
+            .arg(&logs_dir)
             .arg("-port")
             .arg(port.to_string())
             .arg("-maxplayers")
             .arg(max_players.to_string())
+            .current_dir(server_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::piped());
@@ -144,9 +156,16 @@ impl ProcessManager {
             }
         }
 
-        if let Some(wn) = world_name_for_create {
-            if !wn.is_empty() {
-                cmd.arg("-worldname").arg(wn);
+        if autocreate.is_some() {
+            if let Some(wn) = world_name_for_create {
+                if !wn.is_empty() {
+                    let normalized_name = if wn.ends_with(".wld") {
+                        wn.trim_end_matches(".wld")
+                    } else {
+                        wn.as_str()
+                    };
+                    cmd.arg("-worldname").arg(normalized_name);
+                }
             }
         }
 

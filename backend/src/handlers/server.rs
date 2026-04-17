@@ -18,23 +18,53 @@ fn is_world_file_name(name: &str) -> bool {
     name.ends_with(".wld") || name.ends_with(".wld.bak") || name.ends_with(".bak")
 }
 
+fn normalize_world_name_for_runtime(world_name: &str) -> String {
+    if world_name.ends_with(".wld") {
+        return world_name.to_string();
+    }
+
+    if world_name.ends_with(".wld.bak") {
+        return world_name.trim_end_matches(".bak").to_string();
+    }
+
+    if world_name.ends_with(".bak") {
+        let base = world_name.trim_end_matches(".bak");
+        if base.ends_with(".wld") {
+            return base.to_string();
+        }
+        return format!("{}.wld", base);
+    }
+
+    format!("{}.wld", world_name)
+}
+
 fn resolve_world_path(world_dir: &std::path::Path, world_name: &str) -> Option<String> {
     if world_name.is_empty() {
         return None;
     }
 
-    let mut candidates = Vec::new();
-    if world_name.ends_with(".wld") || world_name.ends_with(".bak") {
-        candidates.push(world_dir.join(world_name));
-    } else {
-        candidates.push(world_dir.join(format!("{}.wld", world_name)));
-        candidates.push(world_dir.join(format!("{}.wld.bak", world_name)));
-        candidates.push(world_dir.join(format!("{}.bak", world_name)));
-    }
+    let normalized = normalize_world_name_for_runtime(world_name);
+    let candidates = vec![world_dir.join(&normalized)];
 
     for candidate in candidates {
         if candidate.exists() {
             return Some(candidate.to_string_lossy().to_string());
+        }
+    }
+
+    // If the DB still points to a backup file, restore it to the active .wld name.
+    if world_name != normalized {
+        let backup_path = world_dir.join(world_name);
+        let restored_path = world_dir.join(&normalized);
+        if backup_path.exists() && backup_path.is_file() {
+            if std::fs::copy(&backup_path, &restored_path).is_ok() {
+                tracing::info!(
+                    source = %backup_path.display(),
+                    restored = %restored_path.display(),
+                    "Restored backup world file to active .wld before startup"
+                );
+                return Some(restored_path.to_string_lossy().to_string());
+            }
         }
     }
 
@@ -49,7 +79,9 @@ fn resolve_world_path(world_dir: &std::path::Path, world_name: &str) -> Option<S
                 continue;
             };
 
-            if is_world_file_name(fname) && fname.starts_with(world_name) {
+            if fname.ends_with(".wld")
+                && (fname == normalized || fname.starts_with(world_name))
+            {
                 return Some(path.to_string_lossy().to_string());
             }
         }
