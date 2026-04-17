@@ -136,6 +136,64 @@ fn resolve_world_path(world_dir: &std::path::Path, world_name: &str) -> Option<S
     None
 }
 
+fn map_world_width_to_autocreate(width: Option<u64>) -> u32 {
+    match width.unwrap_or(6400) {
+        w if w <= 4200 => 1,
+        w if w <= 6400 => 2,
+        _ => 3,
+    }
+}
+
+fn write_server_config_file(
+    server_dir: &std::path::Path,
+    world_path: &Option<String>,
+    world_name_for_create: &Option<String>,
+    autocreate: Option<u32>,
+    port: u16,
+    max_players: i32,
+    password: &Option<String>,
+    difficulty: Option<u32>,
+    seed: &Option<String>,
+) -> Result<String, AppError> {
+    let mut lines = Vec::new();
+    lines.push(format!("worldpath={}", server_dir.join("world").display()));
+    lines.push(format!("port={}", port));
+    lines.push(format!("maxplayers={}", max_players));
+
+    if let Some(password) = password {
+        if !password.is_empty() {
+            lines.push(format!("password={}", password));
+        }
+    }
+
+    if let Some(world_path) = world_path {
+        lines.push(format!("world={}", world_path));
+    } else {
+        let size = autocreate.unwrap_or(2);
+        lines.push(format!("autocreate={}", size));
+        let world_name = world_name_for_create
+            .as_ref()
+            .map(|name| normalize_world_name_for_runtime(name))
+            .unwrap_or_else(|| "world.wld".to_string());
+        lines.push(format!(
+            "worldname={}",
+            world_name.trim_end_matches(".wld")
+        ));
+        lines.push(format!("difficulty={}", difficulty.unwrap_or(0)));
+        if let Some(seed) = seed {
+            if !seed.is_empty() {
+                lines.push(format!("seed={}", seed));
+            }
+        }
+    }
+
+    let server_config_path = server_dir.join("serverconfig.txt");
+    std::fs::write(&server_config_path, lines.join("\n"))
+        .map_err(|e| AppError::FileError(format!("Failed to write serverconfig.txt: {}", e)))?;
+
+    Ok(server_config_path.to_string_lossy().to_string())
+}
+
 fn load_servers_from_db(state: &AppState) -> Result<Vec<Server>, AppError> {
     let db = state.db.lock().map_err(|_| {
         AppError::InternalServerError("Failed to acquire database lock".to_string())
@@ -502,14 +560,14 @@ pub async fn start_server(
     }
 
     // Use a block to ensure MutexGuard is dropped before any .await
-    let (port, max_players, password, tshock_version, world_name) = {
+    let (server_name, port, max_players, password, tshock_version, world_name) = {
         let db = state.db.lock().map_err(|_| {
             AppError::InternalServerError("Failed to acquire database lock".to_string())
         })?;
 
-        let result: (u16, i32, Option<String>, String, Option<String>) = db
+        let result: (String, u16, i32, Option<String>, String, Option<String>) = db
             .query_row(
-                "SELECT port, max_players, password, tshock_version, world_name FROM servers WHERE id = ?1",
+                "SELECT name, port, max_players, password, tshock_version, world_name FROM servers WHERE id = ?1",
                 params![id],
                 |row| {
                     Ok((
@@ -518,6 +576,7 @@ pub async fn start_server(
                         row.get(2)?,
                         row.get(3)?,
                         row.get(4)?,
+                        row.get(5)?,
                     ))
                 },
             )
@@ -528,6 +587,7 @@ pub async fn start_server(
 
     tracing::info!(
         server_id = %id,
+        server_name = %server_name,
         port = port,
         max_players = max_players,
         tshock_version = %tshock_version,
@@ -582,40 +642,57 @@ pub async fn start_server(
     });
 
     // Read TShock config for autocreate settings (world size)
-    let (autocreate, world_name_for_create) = if world_path.is_none() {
+    let (autocreate, world_name_for_create, difficulty, seed) = if world_path.is_none() {
         // No existing world file — check config for autocreate
         let config_json_path = config_path.join("config.json");
         if config_json_path.exists() {
             let config_str = std::fs::read_to_string(&config_json_path).unwrap_or_default();
             let config: serde_json::Value = serde_json::from_str(&config_str).unwrap_or_default();
             let auto = config.get("auto_create").and_then(|v| v.as_bool()).unwrap_or(false);
+            let width = config.get("world_width").and_then(|v| v.as_u64());
+            let size = map_world_width_to_autocreate(width);
+            let wn = config.get("world_name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or(world_name_clone.clone())
+                .or_else(|| Some(server_name.clone()));
+            let difficulty = config
+                .get("difficulty")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+            let seed = config
+                .get("seed")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             if auto {
-                // Determine world size from config (width → autocreate size)
-                let width = config.get("world_width").and_then(|v| v.as_u64()).unwrap_or(6400);
-                let size = match width {
-                    w if w <= 4200 => 1u32,
-                    w if w <= 6400 => 2,
-                    _ => 3,
-                };
-                let wn = config.get("world_name")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .or(world_name_clone);
-                (Some(size), wn)
+                (Some(size), wn, difficulty, seed)
             } else {
-                (None, world_name_clone)
+                (Some(size), wn, difficulty, seed)
             }
         } else {
-            (None, world_name_clone)
+            (Some(2), world_name_clone.or_else(|| Some(server_name.clone())), Some(0), None)
         }
     } else {
-        (None, None)
+        (None, None, None, None)
     };
+
+    let server_config_path = write_server_config_file(
+        &server_dir,
+        &world_path,
+        &world_name_for_create,
+        autocreate,
+        port,
+        max_players,
+        &password,
+        difficulty,
+        &seed,
+    )?;
 
     tracing::debug!(
         server_id = %id,
         version_path = %version_path.display(),
         config_path = %config_path.display(),
+        server_config_path = %server_config_path,
         world_path = ?world_path,
         autocreate = ?autocreate,
         "Launching TShock process"
@@ -627,6 +704,7 @@ pub async fn start_server(
             &id,
             version_path.to_str().unwrap(),
             config_path.to_str().unwrap(),
+            &Some(server_config_path),
             port,
             max_players,
             &password,

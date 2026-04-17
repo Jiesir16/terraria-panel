@@ -32,6 +32,7 @@ impl ProcessManager {
         server_id: &str,
         version_path: &str,
         config_path: &str,
+        server_config_path: &Option<String>,
         port: u16,
         max_players: i32,
         password: &Option<String>,
@@ -141,6 +142,12 @@ impl ProcessManager {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::piped());
+
+        if let Some(server_config_path) = server_config_path {
+            if !server_config_path.is_empty() {
+                cmd.arg("-config").arg(server_config_path);
+            }
+        }
 
         if let Some(pwd) = password {
             cmd.arg("-password").arg(pwd);
