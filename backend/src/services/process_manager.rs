@@ -1,16 +1,15 @@
+use crate::db::DbPool;
 use crate::error::AppError;
 use crate::models::ServerStatus;
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
-use tokio::process::Child;
 use tokio::sync::{broadcast, RwLock};
 
 pub struct ServerProcess {
-    pub child: Child,
     pub stdin_tx: tokio::sync::mpsc::UnboundedSender<String>,
-    pub stdout_rx: broadcast::Receiver<String>,
+    pub log_tx: broadcast::Sender<String>,
     #[allow(dead_code)]
     pub status: ServerStatus,
 }
@@ -18,13 +17,20 @@ pub struct ServerProcess {
 #[derive(Clone)]
 pub struct ProcessManager {
     processes: Arc<RwLock<HashMap<String, ServerProcess>>>,
+    db: Option<DbPool>,
 }
 
 impl ProcessManager {
     pub fn new() -> Self {
         Self {
             processes: Arc::new(RwLock::new(HashMap::new())),
+            db: None,
         }
+    }
+
+    /// Set the DB pool so the exit watcher can update server status
+    pub fn set_db(&mut self, db: DbPool) {
+        self.db = Some(db);
     }
 
     pub async fn start_server(
@@ -39,12 +45,20 @@ impl ProcessManager {
         autocreate: Option<u32>,
         world_name_for_create: &Option<String>,
     ) -> Result<(), AppError> {
-        let mut processes = self.processes.write().await;
-
-        if processes.contains_key(server_id) {
-            tracing::warn!(server_id = %server_id, "Server process already running");
-            return Err(AppError::Conflict("Server already running".to_string()));
+        // Check if already running (short read lock)
+        {
+            let processes = self.processes.read().await;
+            if processes.contains_key(server_id) {
+                tracing::warn!(server_id = %server_id, "Server process already running");
+                return Err(AppError::Conflict("Server already running".to_string()));
+            }
         }
+
+        // Ensure config directory exists
+        std::fs::create_dir_all(config_path).map_err(|e| {
+            tracing::error!(server_id = %server_id, config_path = %config_path, error = %e, "Failed to create config directory");
+            AppError::ProcessError(format!("Failed to create config directory: {}", e))
+        })?;
 
         // Detect TShock executable: self-contained binary (v6+) or DLL (v5 and earlier)
         let self_contained_bin = format!("{}/TShock.Server", version_path);
@@ -89,7 +103,6 @@ impl ProcessManager {
         // Build command based on executable type
         let mut cmd = if is_self_contained {
             // v6+: self-contained binary, run directly
-            // Ensure execute permission on Linux
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -165,8 +178,13 @@ impl ProcessManager {
             .take()
             .ok_or_else(|| AppError::ProcessError("Failed to get stdout".to_string()))?;
 
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| AppError::ProcessError("Failed to get stderr".to_string()))?;
+
         let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (stdout_tx, stdout_rx) = broadcast::channel(100);
+        let (log_tx, _log_rx) = broadcast::channel(1000);
 
         // Spawn stdin writer task
         let server_id_stdin = server_id.to_string();
@@ -181,68 +199,108 @@ impl ProcessManager {
         });
 
         // Spawn stdout reader task
-        let stdout_tx_clone = stdout_tx.clone();
+        let log_tx_stdout = log_tx.clone();
         let server_id_stdout = server_id.to_string();
         tokio::spawn(async move {
             use tokio::io::AsyncBufReadExt;
             let reader = tokio::io::BufReader::new(stdout);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                let _ = stdout_tx_clone.send(line);
+                tracing::trace!(server_id = %server_id_stdout, line = %line, "stdout");
+                let _ = log_tx_stdout.send(line);
             }
-            tracing::info!(server_id = %server_id_stdout, "Stdout reader task ended (process likely exited)");
+            tracing::info!(server_id = %server_id_stdout, "Stdout reader task ended");
+        });
+
+        // Spawn stderr reader task — merge into same log channel
+        let log_tx_stderr = log_tx.clone();
+        let server_id_stderr = server_id.to_string();
+        tokio::spawn(async move {
+            use tokio::io::AsyncBufReadExt;
+            let reader = tokio::io::BufReader::new(stderr);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                tracing::warn!(server_id = %server_id_stderr, stderr = %line, "TShock stderr");
+                let _ = log_tx_stderr.send(format!("[STDERR] {}", line));
+            }
+            tracing::info!(server_id = %server_id_stderr, "Stderr reader task ended");
         });
 
         let process = ServerProcess {
-            child,
             stdin_tx,
-            stdout_rx,
+            log_tx,
             status: ServerStatus::Running,
         };
 
+        // Insert under write lock
+        let mut processes = self.processes.write().await;
         processes.insert(server_id.to_string(), process);
         tracing::info!(server_id = %server_id, "Server process registered");
+
+        // Now spawn the real exit watcher that owns the child
+        let processes_ref = Arc::clone(&self.processes);
+        let db_ref2 = self.db.clone();
+        let server_id_exit2 = server_id.to_string();
+        tokio::spawn(async move {
+            let status = child.wait().await;
+            match &status {
+                Ok(exit) => {
+                    tracing::warn!(
+                        server_id = %server_id_exit2,
+                        exit_code = ?exit.code(),
+                        "TShock process exited"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        server_id = %server_id_exit2,
+                        error = %e,
+                        "Error waiting for TShock process"
+                    );
+                }
+            }
+
+            // Remove from processes map
+            {
+                let mut processes = processes_ref.write().await;
+                processes.remove(&server_id_exit2);
+                tracing::info!(server_id = %server_id_exit2, "Process entry removed after exit");
+            }
+
+            // Update DB status to stopped
+            if let Some(db) = db_ref2 {
+                if let Ok(db) = db.lock() {
+                    let now = chrono::Utc::now().to_rfc3339();
+                    let _ = db.execute(
+                        "UPDATE servers SET status = ?1, updated_at = ?2 WHERE id = ?3",
+                        rusqlite::params!["stopped", now, server_id_exit2],
+                    );
+                    tracing::info!(server_id = %server_id_exit2, "DB status updated to stopped");
+                }
+            }
+        });
+
+        drop(processes); // release write lock
+
         Ok(())
     }
 
     pub async fn stop_server(&self, server_id: &str) -> Result<(), AppError> {
         let mut processes = self.processes.write().await;
 
-        if let Some(mut process) = processes.remove(server_id) {
+        if let Some(process) = processes.remove(server_id) {
             tracing::info!(server_id = %server_id, "Stopping server: sending exit command");
-            // Send exit command
+            // Send exit command via stdin
             let _ = process.stdin_tx.send("exit".to_string());
 
-            // Wait for graceful shutdown
-            let timeout = std::time::Duration::from_secs(10);
-            let start = std::time::Instant::now();
+            // The exit watcher task will detect the process exit and update DB.
+            // We just wait a bit for graceful shutdown confirmation.
+            drop(processes); // release lock so exit watcher can work
 
-            loop {
-                match process.child.try_wait() {
-                    Ok(Some(status)) => {
-                        tracing::info!(server_id = %server_id, exit_code = ?status.code(), "Server process exited gracefully");
-                        return Ok(());
-                    }
-                    Ok(None) => {
-                        if start.elapsed() > timeout {
-                            tracing::warn!(server_id = %server_id, "Server did not exit within timeout, force killing");
-                            break;
-                        }
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    }
-                    Err(e) => {
-                        tracing::error!(server_id = %server_id, error = %e, "Error waiting for server process");
-                        return Err(AppError::ProcessError(format!(
-                            "Failed to wait for process: {}",
-                            e
-                        )))
-                    }
-                }
-            }
+            // Give TShock a moment to process the exit command
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
-            // Force kill
-            let _ = process.child.kill().await;
-            tracing::warn!(server_id = %server_id, "Server process force killed");
+            tracing::info!(server_id = %server_id, "Stop command sent");
             Ok(())
         } else {
             tracing::warn!(server_id = %server_id, "Cannot stop: server not running");
@@ -272,8 +330,8 @@ impl ProcessManager {
     pub async fn get_status(&self, server_id: &str) -> Result<ServerStatus, AppError> {
         let processes = self.processes.read().await;
 
-        if let Some(process) = processes.get(server_id) {
-            Ok(process.status)
+        if processes.contains_key(server_id) {
+            Ok(ServerStatus::Running)
         } else {
             Ok(ServerStatus::Stopped)
         }
@@ -283,7 +341,7 @@ impl ProcessManager {
         let processes = self.processes.read().await;
 
         if let Some(process) = processes.get(server_id) {
-            Ok(process.stdout_rx.resubscribe())
+            Ok(process.log_tx.subscribe())
         } else {
             Err(AppError::NotFound(format!("Server {} not running", server_id)))
         }

@@ -72,7 +72,7 @@ pub async fn list_servers(
         .prepare("SELECT id, name, port, tshock_version, world_name, status, password, max_players, auto_start, created_by, created_at, updated_at FROM servers")
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
-    let servers = stmt
+    let mut servers = stmt
         .query_map([], |row| {
             Ok(Server {
                 id: row.get(0)?,
@@ -92,6 +92,23 @@ pub async fn list_servers(
         .map_err(|e| AppError::DatabaseError(e.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+    drop(stmt);
+    drop(db); // release DB lock before async call
+
+    // Cross-check: fix stale "running" status for servers whose process has exited
+    for server in &mut servers {
+        if server.status == "running" && !state.process_manager.is_running(&server.id).await {
+            server.status = "stopped".to_string();
+            if let Ok(db) = state.db.lock() {
+                let now = Utc::now().to_rfc3339();
+                let _ = db.execute(
+                    "UPDATE servers SET status = ?1, updated_at = ?2 WHERE id = ?3",
+                    params!["stopped", now, server.id],
+                );
+            }
+        }
+    }
 
     tracing::debug!(count = servers.len(), "Listed servers");
     Ok(Json(servers))
@@ -187,7 +204,7 @@ pub async fn get_server(
         AppError::InternalServerError("Failed to acquire database lock".to_string())
     })?;
 
-    let server = db
+    let mut server = db
         .query_row(
             "SELECT id, name, port, tshock_version, world_name, status, password, max_players, auto_start, created_by, created_at, updated_at FROM servers WHERE id = ?1",
             params![id],
@@ -209,6 +226,21 @@ pub async fn get_server(
             },
         )
         .map_err(|_| AppError::NotFound("Server not found".to_string()))?;
+
+    // Cross-check: if DB says running but process is not, fix the status
+    drop(db); // release DB lock before async call
+    let actually_running = state.process_manager.is_running(&id).await;
+    if server.status == "running" && !actually_running {
+        server.status = "stopped".to_string();
+        // Also fix DB
+        if let Ok(db) = state.db.lock() {
+            let now = Utc::now().to_rfc3339();
+            let _ = db.execute(
+                "UPDATE servers SET status = ?1, updated_at = ?2 WHERE id = ?3",
+                params!["stopped", now, id],
+            );
+        }
+    }
 
     Ok(Json(ServerDetail {
         server,
@@ -442,6 +474,12 @@ pub async fn start_server(
         .join("servers")
         .join(&id);
 
+    // Ensure server directories exist (they should from create, but verify)
+    let _ = std::fs::create_dir_all(server_dir.join("world"));
+    let _ = std::fs::create_dir_all(server_dir.join("tshock"));
+    let _ = std::fs::create_dir_all(server_dir.join("ServerPlugins"));
+    let _ = std::fs::create_dir_all(server_dir.join("logs"));
+
     let config_path = server_dir.join("tshock");
 
     // Resolve world file path
@@ -509,6 +547,15 @@ pub async fn start_server(
             &world_name_for_create,
         )
         .await?;
+
+    // Wait briefly and verify the process didn't crash immediately
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    if !state.process_manager.is_running(&id).await {
+        tracing::error!(server_id = %id, "TShock process exited immediately after spawn");
+        return Err(AppError::ProcessError(
+            "服务器进程启动后立即退出，请检查后端日志（stderr）了解详情".to_string()
+        ));
+    }
 
     // Update database status — block ensures MutexGuard doesn't leak
     {
