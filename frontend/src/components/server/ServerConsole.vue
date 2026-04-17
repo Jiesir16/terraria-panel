@@ -1,5 +1,14 @@
 <template>
   <div class="console-container">
+    <div class="console-status-bar">
+      <span :class="connected ? 'status-connected' : 'status-disconnected'">
+        {{ connected ? '已连接' : '未连接' }}
+      </span>
+      <n-button v-if="!connected" text type="primary" size="tiny" @click="handleReconnect">
+        重新连接
+      </n-button>
+    </div>
+
     <div class="console-output" ref="consoleRef">
       <div class="console-terminal">
         <div
@@ -43,8 +52,9 @@
           v-model:value="commandInput"
           placeholder="输入命令..."
           :on-keyup="handleKeyup"
+          :disabled="!connected"
         />
-        <n-button type="primary" @click="sendCurrentCommand">
+        <n-button type="primary" @click="sendCurrentCommand" :disabled="!connected">
           发送
         </n-button>
       </div>
@@ -53,7 +63,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick, onUnmounted } from 'vue'
+import { ref, nextTick, onUnmounted } from 'vue'
 import { NInput, NButton, NSpace } from 'naive-ui'
 import { useWebSocket } from '../../composables/useWebSocket'
 import { useNotification } from '../../composables/useNotification'
@@ -68,24 +78,27 @@ const notification = useNotification()
 const consoleRef = ref<HTMLElement>()
 const inputRef = ref()
 const commandInput = ref('')
-const messages = ref<string[]>([])
 const commandHistory = ref<string[]>([])
 const historyIndex = ref(-1)
 
-const { sendCommand: wsSendCommand } = useWebSocket(
+const { sendCommand: wsSendCommand, connected, messages, reconnect } = useWebSocket(
   props.serverId,
   {
-    onMessage: (data) => {
-      messages.value.push(data)
+    onMessage: () => {
       nextTick(() => {
         scrollToBottom()
       })
     },
     onError: () => {
-      notification.error('连接错误', '无法连接到 WebSocket')
+      // Silently handle — status bar shows connection state
     }
   }
 )
+
+function handleReconnect() {
+  reconnect()
+  notification.success('正在重新连接...', '')
+}
 
 function getLogClass(message: string): string {
   if (message.includes('error') || message.includes('Error')) {
@@ -145,10 +158,6 @@ function handleKeyup(e: KeyboardEvent) {
   }
 }
 
-onMounted(() => {
-  scrollToBottom()
-})
-
 onUnmounted(() => {
   // Cleanup is handled by useWebSocket
 })
@@ -166,6 +175,44 @@ onUnmounted(() => {
   transition: background-color 0.3s, border-color 0.3s;
 }
 
+.console-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background-color: var(--bg-body);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 12px;
+}
+
+.status-connected {
+  color: #50C878;
+}
+
+.status-connected::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #50C878;
+  margin-right: 6px;
+}
+
+.status-disconnected {
+  color: #FF6B6B;
+}
+
+.status-disconnected::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #FF6B6B;
+  margin-right: 6px;
+}
+
 .console-output {
   flex: 1;
   overflow-y: auto;
@@ -181,6 +228,7 @@ onUnmounted(() => {
   word-wrap: break-word;
   line-height: 1.5;
   font-size: 12px;
+  min-height: 100%;
 }
 
 .placeholder {

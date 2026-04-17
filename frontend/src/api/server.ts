@@ -1,6 +1,6 @@
 import api from './index'
 
-export interface ServerStatus {
+export interface Server {
   id: string
   name: string
   port: number
@@ -9,11 +9,23 @@ export interface ServerStatus {
   status: 'stopped' | 'starting' | 'running' | 'stopping' | 'error'
   password?: string
   max_players: number
-  player_count: number
   auto_start: boolean
   created_by: string
   created_at: string
   updated_at: string
+}
+
+// Backend get_server returns nested { server, player_count, uptime_seconds }
+export interface ServerDetailResponse {
+  server: Server
+  player_count: number
+  uptime_seconds: number
+}
+
+// Flattened version used throughout the frontend
+export interface ServerStatus extends Server {
+  player_count: number
+  uptime_seconds?: number
 }
 
 export interface CreateServerRequest {
@@ -52,7 +64,7 @@ export const serverApi = {
     api.get<ServerStatus[]>('/servers'),
 
   getDetail: (id: string) =>
-    api.get<ServerStatus>(`/servers/${id}`),
+    api.get<ServerDetailResponse>(`/servers/${id}`),
 
   create: (data: CreateServerRequest) =>
     api.post<ServerStatus>('/servers', data),

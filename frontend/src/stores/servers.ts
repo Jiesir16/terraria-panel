@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { serverApi, ServerStatus, CreateServerRequest, UpdateServerRequest, ServerConfig } from '../api/server'
+import { serverApi, ServerStatus, ServerDetailResponse, CreateServerRequest, UpdateServerRequest, ServerConfig } from '../api/server'
 
 export const useServersStore = defineStore('servers', () => {
   const servers = ref<ServerStatus[]>([])
@@ -19,8 +19,13 @@ export const useServersStore = defineStore('servers', () => {
     loading.value = true
     try {
       const response = await serverApi.getList()
-      servers.value = response.data
-      return response.data
+      // list_servers returns Server[] (no player_count), normalize to ServerStatus[]
+      servers.value = response.data.map((s: any) => ({
+        ...s,
+        player_count: s.player_count ?? 0,
+        uptime_seconds: s.uptime_seconds ?? 0
+      }))
+      return servers.value
     } finally {
       loading.value = false
     }
@@ -29,12 +34,20 @@ export const useServersStore = defineStore('servers', () => {
   async function fetchServer(id: string) {
     try {
       const response = await serverApi.getDetail(id)
-      currentServer.value = response.data
+      // Backend returns { server: {...}, player_count, uptime_seconds }
+      // Flatten it into a single ServerStatus object
+      const detail = response.data as ServerDetailResponse
+      const flat: ServerStatus = {
+        ...detail.server,
+        player_count: detail.player_count ?? 0,
+        uptime_seconds: detail.uptime_seconds ?? 0
+      }
+      currentServer.value = flat
       const index = servers.value.findIndex(s => s.id === id)
       if (index >= 0) {
-        servers.value[index] = response.data
+        servers.value[index] = flat
       }
-      return response.data
+      return flat
     } catch (error) {
       throw error
     }
@@ -42,20 +55,22 @@ export const useServersStore = defineStore('servers', () => {
 
   async function createServer(data: CreateServerRequest) {
     const response = await serverApi.create(data)
-    servers.value.push(response.data)
-    return response.data
+    const server: ServerStatus = { ...response.data, player_count: 0, uptime_seconds: 0 }
+    servers.value.push(server)
+    return server
   }
 
   async function updateServer(id: string, data: UpdateServerRequest) {
     const response = await serverApi.update(id, data)
+    const server: ServerStatus = { ...response.data, player_count: 0, uptime_seconds: 0 }
     const index = servers.value.findIndex(s => s.id === id)
     if (index >= 0) {
-      servers.value[index] = response.data
+      servers.value[index] = server
     }
     if (currentServer.value?.id === id) {
-      currentServer.value = response.data
+      currentServer.value = server
     }
-    return response.data
+    return server
   }
 
   async function deleteServer(id: string) {

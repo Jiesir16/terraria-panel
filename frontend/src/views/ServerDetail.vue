@@ -92,7 +92,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { NSpin, NTabs, NTabPane, NButton } from 'naive-ui'
 import { useServersStore } from '../stores/servers'
@@ -117,14 +117,14 @@ const savesLoading = ref(false)
 const showModUpload = ref(false)
 const mods = ref<any[]>([])
 const saves = ref<any[]>([])
+let statusPollTimer: ReturnType<typeof setInterval> | null = null
 
-const currentServer = ref(serversStore.currentServer)
+const currentServer = computed(() => serversStore.currentServer)
 
 async function loadServer() {
   loading.value = true
   try {
-    const server = await serversStore.fetchServer(serverId)
-    currentServer.value = server
+    await serversStore.fetchServer(serverId)
   } catch (error) {
     notification.error('加载服务器失败', '')
   } finally {
@@ -160,6 +160,7 @@ async function handleStart() {
   try {
     await serversStore.startServer(serverId)
     notification.success('服务器已启动', '')
+    await loadServer()
   } catch (error: any) {
     notification.error('启动失败', error?.response?.data?.message || '')
   }
@@ -169,6 +170,7 @@ async function handleStop() {
   try {
     await serversStore.stopServer(serverId)
     notification.success('服务器已停止', '')
+    await loadServer()
   } catch (error: any) {
     notification.error('停止失败', error?.response?.data?.message || '')
   }
@@ -178,6 +180,7 @@ async function handleRestart() {
   try {
     await serversStore.restartServer(serverId)
     notification.success('服务器已重启', '')
+    await loadServer()
   } catch (error: any) {
     notification.error('重启失败', error?.response?.data?.message || '')
   }
@@ -253,6 +256,17 @@ onMounted(() => {
   loadServer()
   loadMods()
   loadSaves()
+  // Poll server status every 5 seconds to keep UI in sync
+  statusPollTimer = setInterval(() => {
+    serversStore.fetchServer(serverId).catch(() => {})
+  }, 5000)
+})
+
+onUnmounted(() => {
+  if (statusPollTimer) {
+    clearInterval(statusPollTimer)
+    statusPollTimer = null
+  }
 })
 </script>
 
