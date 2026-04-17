@@ -1,4 +1,3 @@
-use crate::db::DbPool;
 use crate::error::AppError;
 use crate::models::ServerStatus;
 use std::collections::HashMap;
@@ -17,20 +16,13 @@ pub struct ServerProcess {
 #[derive(Clone)]
 pub struct ProcessManager {
     processes: Arc<RwLock<HashMap<String, ServerProcess>>>,
-    db: Option<DbPool>,
 }
 
 impl ProcessManager {
     pub fn new() -> Self {
         Self {
             processes: Arc::new(RwLock::new(HashMap::new())),
-            db: None,
         }
-    }
-
-    /// Set the DB pool so the exit watcher can update server status
-    pub fn set_db(&mut self, db: DbPool) {
-        self.db = Some(db);
     }
 
     pub async fn start_server(
@@ -112,7 +104,7 @@ impl ProcessManager {
                     let _ = std::fs::set_permissions(&executable, perms);
                 }
             }
-            let mut c = tokio::process::Command::new(&executable);
+            let c = tokio::process::Command::new(&executable);
             c
         } else {
             // v5 and earlier: run via dotnet runtime
@@ -239,7 +231,6 @@ impl ProcessManager {
 
         // Now spawn the real exit watcher that owns the child
         let processes_ref = Arc::clone(&self.processes);
-        let db_ref2 = self.db.clone();
         let server_id_exit2 = server_id.to_string();
         tokio::spawn(async move {
             let status = child.wait().await;
@@ -265,18 +256,6 @@ impl ProcessManager {
                 let mut processes = processes_ref.write().await;
                 processes.remove(&server_id_exit2);
                 tracing::info!(server_id = %server_id_exit2, "Process entry removed after exit");
-            }
-
-            // Update DB status to stopped
-            if let Some(db) = db_ref2 {
-                if let Ok(db) = db.lock() {
-                    let now = chrono::Utc::now().to_rfc3339();
-                    let _ = db.execute(
-                        "UPDATE servers SET status = ?1, updated_at = ?2 WHERE id = ?3",
-                        rusqlite::params!["stopped", now, server_id_exit2],
-                    );
-                    tracing::info!(server_id = %server_id_exit2, "DB status updated to stopped");
-                }
             }
         });
 

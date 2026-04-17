@@ -58,12 +58,7 @@ fn resolve_world_path(world_dir: &std::path::Path, world_name: &str) -> Option<S
     None
 }
 
-pub async fn list_servers(
-    State(state): State<AppState>,
-    _auth: Auth,
-) -> Result<Json<Vec<Server>>, AppError> {
-    tracing::debug!("Listing all servers");
-
+fn load_servers_from_db(state: &AppState) -> Result<Vec<Server>, AppError> {
     let db = state.db.lock().map_err(|_| {
         AppError::InternalServerError("Failed to acquire database lock".to_string())
     })?;
@@ -72,7 +67,7 @@ pub async fn list_servers(
         .prepare("SELECT id, name, port, tshock_version, world_name, status, password, max_players, auto_start, created_by, created_at, updated_at FROM servers")
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
-    let mut servers = stmt
+    let servers = stmt
         .query_map([], |row| {
             Ok(Server {
                 id: row.get(0)?,
@@ -94,7 +89,52 @@ pub async fn list_servers(
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
     drop(stmt);
-    drop(db); // release DB lock before async call
+    drop(db);
+
+    Ok(servers)
+}
+
+fn load_server_detail_from_db(state: &AppState, id: &str) -> Result<ServerDetail, AppError> {
+    let db = state.db.lock().map_err(|_| {
+        AppError::InternalServerError("Failed to acquire database lock".to_string())
+    })?;
+
+    let server = db
+        .query_row(
+            "SELECT id, name, port, tshock_version, world_name, status, password, max_players, auto_start, created_by, created_at, updated_at FROM servers WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(Server {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    port: row.get(2)?,
+                    tshock_version: row.get(3)?,
+                    world_name: row.get(4)?,
+                    status: row.get(5)?,
+                    password: row.get(6)?,
+                    max_players: row.get(7)?,
+                    auto_start: row.get(8)?,
+                    created_by: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
+                })
+            },
+        )
+        .map_err(|_| AppError::NotFound("Server not found".to_string()))?;
+
+    Ok(ServerDetail {
+        server,
+        player_count: 0,
+        uptime_seconds: 0,
+    })
+}
+
+pub async fn list_servers(
+    State(state): State<AppState>,
+    _auth: Auth,
+) -> Result<Json<Vec<Server>>, AppError> {
+    tracing::debug!("Listing all servers");
+    let mut servers = load_servers_from_db(&state)?;
 
     // Cross-check: fix stale "running" status for servers whose process has exited
     for server in &mut servers {
@@ -200,38 +240,12 @@ pub async fn get_server(
     _auth: Auth,
     Path(id): Path<String>,
 ) -> Result<Json<ServerDetail>, AppError> {
-    let db = state.db.lock().map_err(|_| {
-        AppError::InternalServerError("Failed to acquire database lock".to_string())
-    })?;
-
-    let mut server = db
-        .query_row(
-            "SELECT id, name, port, tshock_version, world_name, status, password, max_players, auto_start, created_by, created_at, updated_at FROM servers WHERE id = ?1",
-            params![id],
-            |row| {
-                Ok(Server {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    port: row.get(2)?,
-                    tshock_version: row.get(3)?,
-                    world_name: row.get(4)?,
-                    status: row.get(5)?,
-                    password: row.get(6)?,
-                    max_players: row.get(7)?,
-                    auto_start: row.get(8)?,
-                    created_by: row.get(9)?,
-                    created_at: row.get(10)?,
-                    updated_at: row.get(11)?,
-                })
-            },
-        )
-        .map_err(|_| AppError::NotFound("Server not found".to_string()))?;
+    let mut detail = load_server_detail_from_db(&state, &id)?;
 
     // Cross-check: if DB says running but process is not, fix the status
-    drop(db); // release DB lock before async call
     let actually_running = state.process_manager.is_running(&id).await;
-    if server.status == "running" && !actually_running {
-        server.status = "stopped".to_string();
+    if detail.server.status == "running" && !actually_running {
+        detail.server.status = "stopped".to_string();
         // Also fix DB
         if let Ok(db) = state.db.lock() {
             let now = Utc::now().to_rfc3339();
@@ -242,11 +256,7 @@ pub async fn get_server(
         }
     }
 
-    Ok(Json(ServerDetail {
-        server,
-        player_count: 0,
-        uptime_seconds: 0,
-    }))
+    Ok(Json(detail))
 }
 
 pub async fn update_server(

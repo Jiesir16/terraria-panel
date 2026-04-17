@@ -49,9 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.auth.jwt_expire_hours,
     ));
 
-    let mut pm = services::ProcessManager::new();
-    pm.set_db(db.clone());
-    let process_manager = Arc::new(pm);
+    let process_manager = Arc::new(services::ProcessManager::new());
     let version_manager = Arc::new(services::VersionManager::new(
         config.server.data_dir.join("versions"),
         config.tshock.github_mirror.clone(),
