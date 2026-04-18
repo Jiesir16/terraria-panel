@@ -230,6 +230,7 @@ fn sync_tshock_runtime_config(
     port: u16,
     max_players: i32,
     password: &Option<String>,
+    panel_config: Option<&ServerConfig>,
 ) -> Result<(), AppError> {
     let config_path = config_dir.join("config.json");
     let mut config = if config_path.exists() {
@@ -258,6 +259,9 @@ fn sync_tshock_runtime_config(
     }
 
     let settings_obj = settings.as_object_mut().unwrap();
+    if let Some(panel_config) = panel_config {
+        panel_config.apply_to_tshock_settings(settings_obj);
+    }
     settings_obj.insert("ServerPort".to_string(), serde_json::json!(port));
     settings_obj.insert("MaxSlots".to_string(), serde_json::json!(max_players));
     settings_obj.insert("ServerName".to_string(), serde_json::json!(server_name));
@@ -735,12 +739,52 @@ pub async fn start_server(
     let _ = std::fs::create_dir_all(server_dir.join("logs"));
 
     let config_path = server_dir.join("tshock");
-    sync_tshock_runtime_config(&config_path, &server_name, port, max_players, &password)?;
+    let panel_config = {
+        let panel_config_path = config_path.join("panel-config.json");
+        if panel_config_path.exists() {
+            let config_str = std::fs::read_to_string(&panel_config_path)
+                .map_err(|e| AppError::FileError(format!("Failed to read panel-config.json: {}", e)))?;
+            Some(
+                serde_json::from_str::<ServerConfig>(&config_str)
+                    .map_err(|e| AppError::BadRequest(format!("Invalid panel-config.json: {}", e)))?,
+            )
+        } else {
+            None
+        }
+    };
+
+    let effective_server_name = panel_config
+        .as_ref()
+        .and_then(|c| c.server_name.clone())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| server_name.clone());
+    let effective_port = panel_config.as_ref().and_then(|c| c.port).unwrap_or(port);
+    let effective_max_players = panel_config
+        .as_ref()
+        .and_then(|c| c.max_players)
+        .unwrap_or(max_players);
+    let effective_password = panel_config
+        .as_ref()
+        .and_then(|c| c.server_password.clone())
+        .or(password.clone());
+    let configured_world_name = panel_config
+        .as_ref()
+        .and_then(|c| c.world_name.clone())
+        .or(world_name.clone());
+
+    sync_tshock_runtime_config(
+        &config_path,
+        &effective_server_name,
+        effective_port,
+        effective_max_players,
+        &effective_password,
+        panel_config.as_ref(),
+    )?;
 
     // Resolve world file path
     let world_dir = server_dir.join("world");
-    let world_name_clone = world_name.clone();
-    let world_path = world_name.and_then(|wn| {
+    let world_name_clone = configured_world_name.clone();
+    let world_path = configured_world_name.and_then(|wn| {
         let resolved = resolve_world_path(&world_dir, &wn);
         if resolved.is_none() {
             tracing::warn!(server_id = %id, world_name = %wn, "World file not found in server directory");
@@ -750,20 +794,14 @@ pub async fn start_server(
 
     // Read TShock config for autocreate settings (world size)
     let (autocreate, world_name_for_create, difficulty, seed) = if world_path.is_none() {
-        let panel_config_path = config_path.join("panel-config.json");
-        if panel_config_path.exists() {
-            let config_str = std::fs::read_to_string(&panel_config_path)
-                .map_err(|e| AppError::FileError(format!("Failed to read panel-config.json: {}", e)))?;
-            let panel_config: ServerConfig = serde_json::from_str(&config_str)
-                .map_err(|e| AppError::BadRequest(format!("Invalid panel-config.json: {}", e)))?;
-
+        if let Some(panel_config) = panel_config.as_ref() {
             let auto = panel_config.auto_create.unwrap_or(false);
             let size = map_world_width_to_autocreate(panel_config.world_width.map(|v| v as u64));
             let wn = panel_config
                 .world_name
                 .clone()
                 .or(world_name_clone.clone())
-                .or_else(|| Some(server_name.clone()));
+                .or_else(|| Some(effective_server_name.clone()));
             let difficulty = panel_config.difficulty;
             let seed = panel_config.seed.clone();
 
@@ -785,7 +823,7 @@ pub async fn start_server(
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .or(world_name_clone.clone())
-                    .or_else(|| Some(server_name.clone()));
+                    .or_else(|| Some(effective_server_name.clone()));
                 let difficulty = config
                     .get("difficulty")
                     .and_then(|v| v.as_u64())
@@ -796,7 +834,7 @@ pub async fn start_server(
                     .map(|s| s.to_string());
                 (Some(size), wn, difficulty, seed)
             } else {
-                (Some(2), world_name_clone.or_else(|| Some(server_name.clone())), Some(0), None)
+                (Some(2), world_name_clone.or_else(|| Some(effective_server_name.clone())), Some(0), None)
             }
         }
     } else {
@@ -808,9 +846,9 @@ pub async fn start_server(
         &world_path,
         &world_name_for_create,
         autocreate,
-        port,
-        max_players,
-        &password,
+        effective_port,
+        effective_max_players,
+        &effective_password,
         difficulty,
         &seed,
     )?;
@@ -832,16 +870,16 @@ pub async fn start_server(
             version_path.to_str().unwrap(),
             config_path.to_str().unwrap(),
             &Some(server_config_path),
-            port,
-            max_players,
-            &password,
+            effective_port,
+            effective_max_players,
+            &effective_password,
             &world_path,
             autocreate,
             &world_name_for_create,
         )
         .await?;
 
-    let ready = wait_for_server_ready(&state, &id, port, 30).await?;
+    let ready = wait_for_server_ready(&state, &id, effective_port, 30).await?;
 
     // Update database status — block ensures MutexGuard doesn't leak
     {
@@ -863,7 +901,7 @@ pub async fn start_server(
         tracing::warn!(
             user = %auth.username,
             server_id = %id,
-            port = port,
+            port = effective_port,
             "Server process is running but port is not ready yet"
         );
     }
@@ -871,7 +909,7 @@ pub async fn start_server(
     crate::db::log_operation(
         &state.db, &auth.user_id, "启动服务器",
         Some(&server_name),
-        Some(&format!("端口: {}, 版本: {}", port, tshock_version)),
+        Some(&format!("端口: {}, 版本: {}", effective_port, tshock_version)),
     );
 
     Ok(Json(json!({

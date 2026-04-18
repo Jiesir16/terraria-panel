@@ -469,9 +469,9 @@ async function handleSave() {
     await serversStore.updateConfig(props.serverId, formData.value as any)
     await serversStore.updateServer(props.serverId, {
       world_name: formData.value.world_name || undefined,
-      port: formData.value.port || undefined,
-      password: formData.value.server_password || undefined,
-      max_players: formData.value.max_players || undefined,
+      port: formData.value.port ?? undefined,
+      password: formData.value.server_password ?? '',
+      max_players: formData.value.max_players ?? undefined,
     })
     notification.success(
       '配置已保存',

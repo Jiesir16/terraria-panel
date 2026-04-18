@@ -11,6 +11,112 @@ use crate::{
     handlers::AppState,
 };
 
+fn load_panel_config(config_dir: &std::path::Path) -> Result<Option<ServerConfig>, AppError> {
+    let panel_config_path = config_dir.join("panel-config.json");
+    if !panel_config_path.exists() {
+        return Ok(None);
+    }
+
+    let config_str = std::fs::read_to_string(&panel_config_path)
+        .map_err(|e| AppError::FileError(e.to_string()))?;
+    let config = serde_json::from_str::<ServerConfig>(&config_str)
+        .map_err(|e| AppError::BadRequest(format!("Invalid panel-config.json: {}", e)))?;
+    Ok(Some(config))
+}
+
+fn load_tshock_config(config_dir: &std::path::Path) -> Result<Option<ServerConfig>, AppError> {
+    let config_path = config_dir.join("config.json");
+    if !config_path.exists() {
+        return Ok(None);
+    }
+
+    let config_str = std::fs::read_to_string(&config_path)
+        .map_err(|e| AppError::FileError(e.to_string()))?;
+
+    if let Ok(config) = serde_json::from_str::<ServerConfig>(&config_str) {
+        return Ok(Some(config));
+    }
+
+    let value = serde_json::from_str::<serde_json::Value>(&config_str)
+        .map_err(|e| AppError::BadRequest(format!("Invalid config.json: {}", e)))?;
+
+    Ok(ServerConfig::from_tshock_config_value(&value))
+}
+
+fn save_config_files(config_dir: &std::path::Path, config: &ServerConfig) -> Result<(), AppError> {
+    std::fs::create_dir_all(config_dir)
+        .map_err(|e| AppError::FileError(e.to_string()))?;
+
+    let panel_config_path = config_dir.join("panel-config.json");
+    let panel_json = serde_json::to_string_pretty(config)
+        .map_err(|e| AppError::BadRequest(format!("Invalid config: {}", e)))?;
+    std::fs::write(&panel_config_path, panel_json)
+        .map_err(|e| AppError::FileError(e.to_string()))?;
+
+    let tshock_config_path = config_dir.join("config.json");
+    let mut tshock_config = if tshock_config_path.exists() {
+        let content = std::fs::read_to_string(&tshock_config_path)
+            .map_err(|e| AppError::FileError(e.to_string()))?;
+        serde_json::from_str::<serde_json::Value>(&content).unwrap_or_else(|_| json!({}))
+    } else {
+        json!({})
+    };
+
+    if !tshock_config.is_object() {
+        tshock_config = json!({});
+    }
+
+    let settings = tshock_config
+        .as_object_mut()
+        .unwrap()
+        .entry("Settings")
+        .or_insert_with(|| json!({}));
+    if !settings.is_object() {
+        *settings = json!({});
+    }
+
+    config.apply_to_tshock_settings(settings.as_object_mut().unwrap());
+
+    let tshock_json = serde_json::to_string_pretty(&tshock_config)
+        .map_err(|e| AppError::BadRequest(format!("Failed to serialize: {}", e)))?;
+    std::fs::write(&tshock_config_path, tshock_json)
+        .map_err(|e| AppError::FileError(e.to_string()))?;
+
+    Ok(())
+}
+
+fn sync_server_row_from_config(
+    state: &AppState,
+    server_id: &str,
+    config: &ServerConfig,
+) -> Result<(), AppError> {
+    let db = state.db.lock().map_err(|_| {
+        AppError::InternalServerError("Failed to acquire database lock".to_string())
+    })?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    db.execute(
+        "UPDATE servers
+         SET port = COALESCE(?1, port),
+             password = COALESCE(?2, password),
+             max_players = COALESCE(?3, max_players),
+             world_name = COALESCE(?4, world_name),
+             updated_at = ?5
+         WHERE id = ?6",
+        rusqlite::params![
+            config.port,
+            config.server_password,
+            config.max_players,
+            config.world_name,
+            now,
+            server_id
+        ],
+    )
+    .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+    Ok(())
+}
+
 pub async fn get_config(
     State(state): State<AppState>,
     _auth: Auth,
@@ -26,29 +132,12 @@ pub async fn get_config(
         .join(&server_id)
         .join("tshock");
 
-    // Try reading panel-config.json first (our format), fallback to config.json
-    let panel_config_path = config_dir.join("panel-config.json");
-    let config_path = config_dir.join("config.json");
-
-    if panel_config_path.exists() {
-        let config_str = std::fs::read_to_string(&panel_config_path)
-            .map_err(|e| AppError::FileError(e.to_string()))?;
-        let config: ServerConfig = serde_json::from_str(&config_str)
-            .map_err(|e| {
-                tracing::error!(server_id = %server_id, error = %e, "Failed to parse panel-config.json");
-                AppError::BadRequest(format!("Invalid JSON: {}", e))
-            })?;
+    if let Some(config) = load_panel_config(&config_dir)? {
         return Ok(Json(config));
     }
 
-    if config_path.exists() {
-        // Try to parse as our format (backward compat)
-        let config_str = std::fs::read_to_string(&config_path)
-            .map_err(|e| AppError::FileError(e.to_string()))?;
-        if let Ok(config) = serde_json::from_str::<ServerConfig>(&config_str) {
-            return Ok(Json(config));
-        }
-        tracing::debug!(server_id = %server_id, "config.json not in panel format, returning defaults");
+    if let Some(config) = load_tshock_config(&config_dir)? {
+        return Ok(Json(config));
     }
 
     tracing::debug!(server_id = %server_id, "Config file not found, returning defaults");
@@ -77,45 +166,8 @@ pub async fn update_config(
         .join(&server_id)
         .join("tshock");
 
-    std::fs::create_dir_all(&config_dir)
-        .map_err(|e| AppError::FileError(e.to_string()))?;
-
-    // Save our panel config as panel-config.json (for UI round-trip)
-    let panel_config_path = config_dir.join("panel-config.json");
-    let panel_json = serde_json::to_string_pretty(&config)
-        .map_err(|e| AppError::BadRequest(format!("Invalid config: {}", e)))?;
-    std::fs::write(&panel_config_path, panel_json)
-        .map_err(|e| AppError::FileError(e.to_string()))?;
-
-    // Also sync to TShock's config.json in { "Settings": { ... } } format
-    let tshock_config_path = config_dir.join("config.json");
-    let mut tshock_config = if tshock_config_path.exists() {
-        let content = std::fs::read_to_string(&tshock_config_path)
-            .map_err(|e| AppError::FileError(e.to_string()))?;
-        serde_json::from_str::<serde_json::Value>(&content).unwrap_or_else(|_| json!({}))
-    } else {
-        json!({})
-    };
-
-    if !tshock_config.is_object() {
-        tshock_config = json!({});
-    }
-
-    let settings = tshock_config
-        .as_object_mut()
-        .unwrap()
-        .entry("Settings")
-        .or_insert_with(|| json!({}));
-    if !settings.is_object() {
-        *settings = json!({});
-    }
-    let settings_obj = settings.as_object_mut().unwrap();
-    config.apply_to_tshock_settings(settings_obj);
-
-    let tshock_json = serde_json::to_string_pretty(&tshock_config)
-        .map_err(|e| AppError::BadRequest(format!("Failed to serialize: {}", e)))?;
-    std::fs::write(&tshock_config_path, tshock_json)
-        .map_err(|e| AppError::FileError(e.to_string()))?;
+    save_config_files(&config_dir, &config)?;
+    sync_server_row_from_config(&state, &server_id, &config)?;
 
     tracing::info!(server_id = %server_id, "Config updated (panel + TShock config.json)");
 
@@ -154,15 +206,8 @@ pub async fn import_config(
         .join(&server_id)
         .join("tshock");
 
-    std::fs::create_dir_all(&config_dir)
-        .map_err(|e| AppError::FileError(e.to_string()))?;
-
-    let config_path = config_dir.join("config.json");
-    let config_json = serde_json::to_string_pretty(&config)
-        .map_err(|e| AppError::BadRequest(format!("Invalid config: {}", e)))?;
-
-    std::fs::write(&config_path, config_json)
-        .map_err(|e| AppError::FileError(e.to_string()))?;
+    save_config_files(&config_dir, &config)?;
+    sync_server_row_from_config(&state, &server_id, &config)?;
 
     tracing::info!(server_id = %server_id, "Config imported successfully");
 
@@ -179,28 +224,17 @@ pub async fn export_config(
 ) -> Result<Json<ServerConfig>, AppError> {
     tracing::info!(server_id = %server_id, "Exporting server config");
 
-    let config_path = state
+    let config_dir = state
         .config
         .server
         .data_dir
         .join("servers")
         .join(&server_id)
-        .join("tshock")
-        .join("config.json");
+        .join("tshock");
 
-    if !config_path.exists() {
-        tracing::debug!(server_id = %server_id, "Config not found, exporting defaults");
-        return Ok(Json(ServerConfig::default()));
-    }
-
-    let config_str = std::fs::read_to_string(&config_path)
-        .map_err(|e| AppError::FileError(e.to_string()))?;
-
-    let config: ServerConfig = serde_json::from_str(&config_str)
-        .map_err(|e| {
-            tracing::error!(server_id = %server_id, error = %e, "Failed to parse config.json for export");
-            AppError::BadRequest(format!("Invalid JSON: {}", e))
-        })?;
+    let config = load_panel_config(&config_dir)?
+        .or(load_tshock_config(&config_dir)?)
+        .unwrap_or_default();
 
     tracing::info!(server_id = %server_id, "Config exported successfully");
     Ok(Json(config))

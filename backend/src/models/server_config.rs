@@ -140,6 +140,98 @@ impl ServerConfig {
             settings.insert("SoftcoreOnly".to_string(), json!(v));
         }
     }
+
+    pub fn from_tshock_settings(settings: &serde_json::Map<String, serde_json::Value>) -> Self {
+        fn get_string(
+            settings: &serde_json::Map<String, serde_json::Value>,
+            key: &str,
+        ) -> Option<String> {
+            settings.get(key).and_then(|v| v.as_str()).map(|v| v.to_string())
+        }
+
+        fn get_bool(
+            settings: &serde_json::Map<String, serde_json::Value>,
+            key: &str,
+        ) -> Option<bool> {
+            settings.get(key).and_then(|v| v.as_bool())
+        }
+
+        fn get_u16(
+            settings: &serde_json::Map<String, serde_json::Value>,
+            key: &str,
+        ) -> Option<u16> {
+            settings
+                .get(key)
+                .and_then(|v| v.as_u64())
+                .and_then(|v| u16::try_from(v).ok())
+        }
+
+        fn get_u32(
+            settings: &serde_json::Map<String, serde_json::Value>,
+            key: &str,
+        ) -> Option<u32> {
+            settings
+                .get(key)
+                .and_then(|v| v.as_u64())
+                .and_then(|v| u32::try_from(v).ok())
+        }
+
+        fn get_i32(
+            settings: &serde_json::Map<String, serde_json::Value>,
+            key: &str,
+        ) -> Option<i32> {
+            settings
+                .get(key)
+                .and_then(|v| v.as_i64())
+                .and_then(|v| i32::try_from(v).ok())
+        }
+
+        Self {
+            server_name: get_string(settings, "ServerName"),
+            port: get_u16(settings, "ServerPort"),
+            max_players: get_i32(settings, "MaxSlots"),
+            world_name: None,
+            server_password: get_string(settings, "ServerPassword"),
+            difficulty: None,
+            auto_create: None,
+            world_width: None,
+            world_height: None,
+            seed: None,
+            enable_whitelist: get_bool(settings, "EnableWhitelist"),
+            pvp_mode: get_string(settings, "PvPMode"),
+            spawn_protection: get_bool(settings, "SpawnProtection"),
+            spawn_protection_radius: get_u32(settings, "SpawnProtectionRadius"),
+            npc_spawn_protection_radius: None,
+            hard_core_only: get_bool(settings, "HardcoreOnly"),
+            medium_core_only: get_bool(settings, "MediumcoreOnly"),
+            soft_core_only: get_bool(settings, "SoftcoreOnly"),
+            server_side_character: get_bool(settings, "ServerSideCharacter"),
+            disable_build: get_bool(settings, "DisableBuild"),
+            disable_clown_bombs: get_bool(settings, "DisableClownBombs"),
+            disable_dungeon_guardian: get_bool(settings, "DisableDungeonGuardian"),
+            disable_tombstones: get_bool(settings, "DisableTombstones"),
+            force_time: get_string(settings, "ForceTime"),
+            disable_invisible_pvp: get_bool(settings, "DisableInvisPvP"),
+            anti_cheat: get_bool(settings, "EnableAntiCheat"),
+            kick_on_damage_inflicted: get_i32(settings, "KickOnDamageInflicted"),
+            kick_on_damage_received: get_i32(settings, "KickOnDamageReceived"),
+            range_checks: get_bool(settings, "RangeChecks"),
+            disable_player_count_reporting: get_bool(settings, "DisablePlayerCountReporting"),
+            rest_api_enabled: get_bool(settings, "RestApiEnabled"),
+            rest_api_port: get_u16(settings, "RestApiPort"),
+            motd: get_string(settings, "Motd"),
+            server_full_no_reserve_reason: get_string(settings, "ServerFullNoReserveReason"),
+        }
+    }
+
+    pub fn from_tshock_config_value(config: &serde_json::Value) -> Option<Self> {
+        let root = config.as_object()?;
+        let settings = root
+            .get("Settings")
+            .and_then(|v| v.as_object())
+            .unwrap_or(root);
+        Some(Self::from_tshock_settings(settings))
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
