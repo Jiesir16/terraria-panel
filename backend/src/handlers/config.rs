@@ -76,14 +76,38 @@ fn merge_ssc_settings(
 }
 
 fn sync_ssc_config(config_dir: &std::path::Path, config: &ServerConfig) -> Result<(), AppError> {
-    let ssc_config_path = config_dir.join("sscconfig.json");
-    let mut ssc_config = load_ssc_config(config_dir)?.unwrap_or_default();
+    let Some(enabled) = config.server_side_character else {
+        return Ok(());
+    };
 
-    if let Some(enabled) = config.server_side_character {
-        ssc_config.enabled = enabled;
+    let ssc_config_path = config_dir.join("sscconfig.json");
+    let mut ssc_json_value = if ssc_config_path.exists() {
+        let content = std::fs::read_to_string(&ssc_config_path)
+            .map_err(|e| AppError::FileError(e.to_string()))?;
+        match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(value) if value.is_object() => value,
+            Ok(_) => serde_json::to_value(SscConfig::default())
+                .map_err(|e| AppError::BadRequest(format!("Failed to build default sscconfig.json: {}", e)))?,
+            Err(e) => {
+                tracing::warn!(
+                    path = %ssc_config_path.display(),
+                    error = %e,
+                    "Invalid sscconfig.json while syncing Enabled, preserving defaults for missing structure only"
+                );
+                serde_json::to_value(SscConfig::default())
+                    .map_err(|err| AppError::BadRequest(format!("Failed to build default sscconfig.json: {}", err)))?
+            }
+        }
+    } else {
+        serde_json::to_value(SscConfig::default())
+            .map_err(|e| AppError::BadRequest(format!("Failed to build default sscconfig.json: {}", e)))?
+    };
+
+    if let Some(obj) = ssc_json_value.as_object_mut() {
+        obj.insert("Enabled".to_string(), json!(enabled));
     }
 
-    let ssc_json = serde_json::to_string_pretty(&ssc_config)
+    let ssc_json = serde_json::to_string_pretty(&ssc_json_value)
         .map_err(|e| AppError::BadRequest(format!("Failed to serialize sscconfig.json: {}", e)))?;
     std::fs::write(&ssc_config_path, ssc_json)
         .map_err(|e| AppError::FileError(e.to_string()))?;

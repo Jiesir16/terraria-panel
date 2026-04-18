@@ -13,7 +13,7 @@ use crate::{
     error::AppError,
     models::{
         CreateServerRequest, UpdateServerRequest, Server, ServerConfig, ServerDetail, CommandRequest,
-        TShockSecurityOverview, TShockGroupSummary, TShockUserAccount,
+        TShockSecurityOverview, TShockGroupSummary, TShockUserAccount, SscConfig,
     },
     handlers::AppState,
 };
@@ -284,6 +284,55 @@ fn sync_tshock_runtime_config(
         config_path = %config_path.display(),
         has_password = password.is_some(),
         "Synced TShock runtime config (Settings section)"
+    );
+
+    Ok(())
+}
+
+fn sync_ssc_runtime_config(
+    config_dir: &std::path::Path,
+    panel_config: Option<&ServerConfig>,
+) -> Result<(), AppError> {
+    let Some(enabled) = panel_config.and_then(|config| config.server_side_character) else {
+        return Ok(());
+    };
+
+    let ssc_config_path = config_dir.join("sscconfig.json");
+    let mut ssc_json_value = if ssc_config_path.exists() {
+        let content = std::fs::read_to_string(&ssc_config_path)
+            .map_err(|e| AppError::FileError(format!("Failed to read sscconfig.json: {}", e)))?;
+        match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(value) if value.is_object() => value,
+            Ok(_) => serde_json::to_value(SscConfig::default())
+                .map_err(|e| AppError::BadRequest(format!("Failed to build default sscconfig.json: {}", e)))?,
+            Err(e) => {
+                tracing::warn!(
+                    path = %ssc_config_path.display(),
+                    error = %e,
+                    "Invalid sscconfig.json before startup, preserving only canonical Enabled sync"
+                );
+                serde_json::to_value(SscConfig::default())
+                    .map_err(|err| AppError::BadRequest(format!("Failed to build default sscconfig.json: {}", err)))?
+            }
+        }
+    } else {
+        serde_json::to_value(SscConfig::default())
+            .map_err(|e| AppError::BadRequest(format!("Failed to build default sscconfig.json: {}", e)))?
+    };
+
+    if let Some(obj) = ssc_json_value.as_object_mut() {
+        obj.insert("Enabled".to_string(), serde_json::json!(enabled));
+    }
+
+    let content = serde_json::to_string_pretty(&ssc_json_value)
+        .map_err(|e| AppError::BadRequest(format!("Failed to serialize sscconfig.json: {}", e)))?;
+    std::fs::write(&ssc_config_path, content)
+        .map_err(|e| AppError::FileError(format!("Failed to write sscconfig.json: {}", e)))?;
+
+    tracing::info!(
+        path = %ssc_config_path.display(),
+        enabled = enabled,
+        "Synced SSC runtime config"
     );
 
     Ok(())
@@ -1010,6 +1059,7 @@ pub async fn start_server(
         &effective_password,
         panel_config.as_ref(),
     )?;
+    sync_ssc_runtime_config(&config_path, panel_config.as_ref())?;
 
     // Resolve world file path
     let world_dir = server_dir.join("world");
