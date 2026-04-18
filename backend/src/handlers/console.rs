@@ -13,6 +13,22 @@ use crate::{
     handlers::AppState,
 };
 
+fn get_server_owner_id(state: &AppState, server_id: &str) -> Result<Option<String>, AppError> {
+    let db = state.db.lock().map_err(|_| {
+        AppError::InternalServerError("Failed to acquire database lock".to_string())
+    })?;
+
+    let owner_id = db
+        .query_row(
+            "SELECT created_by FROM servers WHERE id = ?1",
+            [server_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .map_err(|_| AppError::NotFound("Server not found".to_string()))?;
+
+    Ok(owner_id)
+}
+
 pub async fn ws_console(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
@@ -31,7 +47,12 @@ pub async fn ws_console(
 
     // Verify token
     let claims = state.token_manager.verify(token)?;
-    tracing::info!(server_id = %id, user = %claims.username, "WebSocket token verified");
+    let auth = Auth {
+        user_id: claims.user_id,
+        username: claims.username,
+        role: claims.role,
+    };
+    tracing::info!(server_id = %id, user = %auth.username, role = %auth.role, "WebSocket token verified");
 
     // Check if server is running first
     if !state.process_manager.is_running(&id).await {
@@ -53,14 +74,23 @@ pub async fn ws_console(
         .get_recent_logs(&id, history_limit)
         .await
         .unwrap_or_default();
+    let server_owner_id = get_server_owner_id(&state, &id)?;
 
     let id_for_handler = id.clone();
-    let process_manager = state.process_manager.clone();
+    let state_for_handler = state.clone();
 
-    tracing::info!(server_id = %id, user = %claims.username, "WebSocket console connected");
+    tracing::info!(server_id = %id, user = %auth.username, "WebSocket console connected");
 
     Ok(ws.on_upgrade(move |socket| async move {
-        handle_ws_with_pm(socket, log_rx, history, id_for_handler, process_manager).await
+        handle_ws_with_pm(
+            socket,
+            log_rx,
+            history,
+            id_for_handler,
+            state_for_handler,
+            auth,
+            server_owner_id,
+        ).await
     }))
 }
 
@@ -69,7 +99,9 @@ async fn handle_ws_with_pm(
     log_rx: tokio::sync::broadcast::Receiver<String>,
     history: Vec<String>,
     server_id: String,
-    pm: std::sync::Arc<crate::services::ProcessManager>,
+    state: AppState,
+    auth: Auth,
+    server_owner_id: Option<String>,
 ) {
     use axum::extract::ws::Message;
     use futures::{SinkExt, StreamExt};
@@ -125,11 +157,43 @@ async fn handle_ws_with_pm(
                     if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&text) {
                         if let Some(cmd) = payload.get("command").and_then(|v| v.as_str()) {
                             tracing::debug!(server_id = %server_id_clone, command = %cmd, "WebSocket command received");
-                            let _ = pm.send_command(&server_id_clone, cmd).await;
+                            if crate::services::can_execute_command(&auth, server_owner_id.as_deref(), cmd) {
+                                let _ = state.process_manager.send_command(&server_id_clone, cmd).await;
+                                crate::db::log_operation(
+                                    &state.db,
+                                    &auth.user_id,
+                                    "发送命令",
+                                    Some(&server_id_clone),
+                                    Some(cmd),
+                                );
+                            } else {
+                                let warning = json!({
+                                    "type": "log",
+                                    "data": format!("[AUTH] 无权限执行命令: {}", cmd)
+                                });
+                                let mut tx = ws_tx.lock().await;
+                                let _ = tx.send(Message::Text(warning.to_string())).await;
+                            }
                         }
                     } else if !text.is_empty() {
                         tracing::debug!(server_id = %server_id_clone, command = %text, "WebSocket raw command received");
-                        let _ = pm.send_command(&server_id_clone, &text).await;
+                        if crate::services::can_execute_command(&auth, server_owner_id.as_deref(), &text) {
+                            let _ = state.process_manager.send_command(&server_id_clone, &text).await;
+                            crate::db::log_operation(
+                                &state.db,
+                                &auth.user_id,
+                                "发送命令",
+                                Some(&server_id_clone),
+                                Some(&text),
+                            );
+                        } else {
+                            let warning = json!({
+                                "type": "log",
+                                "data": format!("[AUTH] 无权限执行命令: {}", text)
+                            });
+                            let mut tx = ws_tx.lock().await;
+                            let _ = tx.send(Message::Text(warning.to_string())).await;
+                        }
                     }
                 }
                 Message::Close(_) => {

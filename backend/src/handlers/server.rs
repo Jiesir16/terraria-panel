@@ -10,7 +10,7 @@ use rusqlite::params;
 use crate::{
     auth::Auth,
     error::AppError,
-    models::{CreateServerRequest, UpdateServerRequest, Server, ServerDetail, CommandRequest},
+    models::{CreateServerRequest, UpdateServerRequest, Server, ServerConfig, ServerDetail, CommandRequest},
     handlers::AppState,
 };
 
@@ -414,6 +414,14 @@ pub async fn create_server(
         "Server created successfully"
     );
 
+    // Log after db lock is released
+    drop(db);
+    crate::db::log_operation(
+        &state.db, &auth.user_id, "创建服务器",
+        Some(&req.name),
+        Some(&format!("端口: {}, 版本: {}", port, req.tshock_version)),
+    );
+
     Ok(Json(Server {
         id: server_id,
         name: req.name,
@@ -564,6 +572,13 @@ pub async fn update_server(
         )
         .map_err(|_| AppError::NotFound("Server not found".to_string()))?;
 
+    let detail_summary = format!(
+        "name={}; port={}; version={}; world={:?}; max_players={}",
+        server.name, server.port, server.tshock_version, server.world_name, server.max_players
+    );
+    drop(db);
+    crate::db::log_operation(&state.db, &auth.user_id, "更新服务器", Some(&id), Some(&detail_summary));
+
     Ok(Json(server))
 }
 
@@ -597,6 +612,10 @@ pub async fn delete_server(
     }
 
     tracing::info!(user = %auth.username, server_id = %id, "Server deleted successfully");
+
+    // Log after db lock is released
+    drop(db);
+    crate::db::log_operation(&state.db, &auth.user_id, "删除服务器", Some(&id), None);
 
     Ok(Json(json!({
         "success": true,
@@ -703,34 +722,54 @@ pub async fn start_server(
 
     // Read TShock config for autocreate settings (world size)
     let (autocreate, world_name_for_create, difficulty, seed) = if world_path.is_none() {
-        // No existing world file — check config for autocreate
-        let config_json_path = config_path.join("config.json");
-        if config_json_path.exists() {
-            let config_str = std::fs::read_to_string(&config_json_path).unwrap_or_default();
-            let config: serde_json::Value = serde_json::from_str(&config_str).unwrap_or_default();
-            let auto = config.get("auto_create").and_then(|v| v.as_bool()).unwrap_or(false);
-            let width = config.get("world_width").and_then(|v| v.as_u64());
-            let size = map_world_width_to_autocreate(width);
-            let wn = config.get("world_name")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
+        let panel_config_path = config_path.join("panel-config.json");
+        if panel_config_path.exists() {
+            let config_str = std::fs::read_to_string(&panel_config_path)
+                .map_err(|e| AppError::FileError(format!("Failed to read panel-config.json: {}", e)))?;
+            let panel_config: ServerConfig = serde_json::from_str(&config_str)
+                .map_err(|e| AppError::BadRequest(format!("Invalid panel-config.json: {}", e)))?;
+
+            let auto = panel_config.auto_create.unwrap_or(false);
+            let size = map_world_width_to_autocreate(panel_config.world_width.map(|v| v as u64));
+            let wn = panel_config
+                .world_name
+                .clone()
                 .or(world_name_clone.clone())
                 .or_else(|| Some(server_name.clone()));
-            let difficulty = config
-                .get("difficulty")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as u32);
-            let seed = config
-                .get("seed")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+            let difficulty = panel_config.difficulty;
+            let seed = panel_config.seed.clone();
+
             if auto {
                 (Some(size), wn, difficulty, seed)
             } else {
-                (Some(size), wn, difficulty, seed)
+                return Err(AppError::BadRequest(
+                    "当前没有可用世界存档，且未开启“自动创建世界”。请先导入/选择存档，或在配置中开启自动创建世界。".to_string(),
+                ));
             }
         } else {
-            (Some(2), world_name_clone.or_else(|| Some(server_name.clone())), Some(0), None)
+            let config_json_path = config_path.join("config.json");
+            if config_json_path.exists() {
+                let config_str = std::fs::read_to_string(&config_json_path).unwrap_or_default();
+                let config: serde_json::Value = serde_json::from_str(&config_str).unwrap_or_default();
+                let width = config.get("world_width").and_then(|v| v.as_u64());
+                let size = map_world_width_to_autocreate(width);
+                let wn = config.get("world_name")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .or(world_name_clone.clone())
+                    .or_else(|| Some(server_name.clone()));
+                let difficulty = config
+                    .get("difficulty")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u32);
+                let seed = config
+                    .get("seed")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                (Some(size), wn, difficulty, seed)
+            } else {
+                (Some(2), world_name_clone.or_else(|| Some(server_name.clone())), Some(0), None)
+            }
         }
     } else {
         (None, None, None, None)
@@ -801,6 +840,12 @@ pub async fn start_server(
         );
     }
 
+    crate::db::log_operation(
+        &state.db, &auth.user_id, "启动服务器",
+        Some(&server_name),
+        Some(&format!("端口: {}, 版本: {}", port, tshock_version)),
+    );
+
     Ok(Json(json!({
         "success": true,
         "message": if ready {
@@ -844,6 +889,8 @@ pub async fn stop_server(
 
     tracing::info!(user = %auth.username, server_id = %id, "Server stopped successfully");
 
+    crate::db::log_operation(&state.db, &auth.user_id, "停止服务器", Some(&id), None);
+
     Ok(Json(json!({
         "success": true,
         "message": "Server stopped successfully"
@@ -878,6 +925,8 @@ pub async fn kill_server(
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
     }
 
+    crate::db::log_operation(&state.db, &auth.user_id, "强制结束服务器", Some(&id), None);
+
     Ok(Json(json!({
         "success": true,
         "message": "Server force kill signal sent"
@@ -893,7 +942,9 @@ pub async fn restart_server(
     let _ = stop_server(State(state.clone()), auth.clone(), Path(id.clone())).await?;
     tracing::debug!(server_id = %id, "Waiting 2s before restart");
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-    start_server(State(state), auth, Path(id)).await
+    let result = start_server(State(state.clone()), auth.clone(), Path(id.clone())).await?;
+    crate::db::log_operation(&state.db, &auth.user_id, "重启服务器", Some(&id), None);
+    Ok(result)
 }
 
 pub async fn send_command(
@@ -904,15 +955,33 @@ pub async fn send_command(
 ) -> Result<Json<serde_json::Value>, AppError> {
     tracing::info!(user = %auth.username, server_id = %id, command = %req.command, "Sending command to server");
 
-    if !auth.is_operator_or_admin() {
+    let server_owner_id = {
+        let db = state.db.lock().map_err(|_| {
+            AppError::InternalServerError("Failed to acquire database lock".to_string())
+        })?;
+        db.query_row(
+            "SELECT created_by FROM servers WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .map_err(|_| AppError::NotFound("Server not found".to_string()))?
+    };
+
+    if !crate::services::can_execute_command(&auth, server_owner_id.as_deref(), &req.command) {
         return Err(AppError::Forbidden(
-            "Only operators and admins can send commands".to_string(),
+            "You do not have permission to execute this command".to_string(),
         ));
     }
 
     state.process_manager.send_command(&id, &req.command).await?;
 
     tracing::debug!(server_id = %id, command = %req.command, "Command sent successfully");
+
+    crate::db::log_operation(
+        &state.db, &auth.user_id, "发送命令",
+        Some(&id),
+        Some(&req.command),
+    );
 
     Ok(Json(json!({
         "success": true,

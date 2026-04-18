@@ -19,7 +19,8 @@ export interface SystemInfo {
 
 export interface OperationLog {
   id: number
-  user_id: string
+  user_id?: string
+  username?: string
   action: string
   target?: string
   details?: string

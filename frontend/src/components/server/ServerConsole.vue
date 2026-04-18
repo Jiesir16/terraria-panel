@@ -37,26 +37,26 @@
     </div>
 
     <div class="console-input">
-      <n-space>
-        <n-button text type="primary" size="small" @click="sendCommand('/save')">
-          /save
-        </n-button>
-        <n-button text type="primary" size="small" @click="sendCommand('/kick')">
-          /kick
-        </n-button>
-        <n-button text type="primary" size="small" @click="sendCommand('/ban')">
-          /ban
-        </n-button>
-        <n-button text type="primary" size="small" @click="sendCommand('/who')">
-          /who
-        </n-button>
-        <n-button text type="primary" size="small" @click="sendCommand('/time day')">
-          Day
-        </n-button>
-        <n-button text type="primary" size="small" @click="sendCommand('/time night')">
-          Night
-        </n-button>
-      </n-space>
+      <!-- 基础命令（所有人可见） -->
+      <div
+        v-for="section in visibleCommandSections"
+        :key="section.label"
+        class="command-section"
+      >
+        <span class="command-label">{{ section.label }}</span>
+        <n-space size="small" :wrap="true">
+          <n-button
+            v-for="item in section.items"
+            :key="`${section.label}-${item.command}`"
+            text
+            :type="item.color"
+            size="small"
+            @click="sendCommand(item.command)"
+          >
+            {{ item.label }}
+          </n-button>
+        </n-space>
+      </div>
 
       <div class="input-row">
         <n-input
@@ -75,11 +75,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, watch, onUnmounted } from 'vue'
+import { computed, ref, nextTick, watch, onUnmounted } from 'vue'
 import { NInput, NButton, NSpace, NSelect } from 'naive-ui'
 import { useWebSocket } from '../../composables/useWebSocket'
 import { useNotification } from '../../composables/useNotification'
+import { useAuthStore } from '../../stores/auth'
+import { useServersStore } from '../../stores/servers'
 import { serverApi } from '../../api/server'
+import { SERVER_COMMAND_SECTIONS, type CommandScope } from '../../constants/serverCommands'
 
 interface Props {
   serverId: string
@@ -87,6 +90,8 @@ interface Props {
 
 const props = defineProps<Props>()
 const notification = useNotification()
+const authStore = useAuthStore()
+const serversStore = useServersStore()
 
 const consoleRef = ref<HTMLElement>()
 const inputRef = ref()
@@ -100,6 +105,29 @@ const historyOptions = [
   { label: '最近 500 行', value: 500 },
   { label: '最近 1000 行', value: 1000 }
 ]
+const currentServer = computed(() => {
+  if (serversStore.currentServer?.id === props.serverId) {
+    return serversStore.currentServer
+  }
+  return serversStore.getServerById(props.serverId) || null
+})
+const isServerOwner = computed(() => currentServer.value?.created_by === authStore.user?.id)
+const visibleCommandSections = computed(() => {
+  const canUseScope = (scope: CommandScope) => {
+    switch (scope) {
+      case 'viewer':
+        return true
+      case 'operator':
+        return authStore.isOperator
+      case 'owner':
+        return authStore.isAdmin || isServerOwner.value
+      case 'admin':
+        return authStore.isAdmin
+    }
+  }
+
+  return SERVER_COMMAND_SECTIONS.filter(section => canUseScope(section.scope))
+})
 
 const { sendCommand: wsSendCommand, connected, messages, reconnect, clearMessages } = useWebSocket(
   props.serverId,
@@ -157,6 +185,15 @@ function scrollToBottom() {
 
 function sendCommand(command: string) {
   commandInput.value = command
+  // For commands that typically need arguments, just fill the input
+  const needsArg = ['/kick', '/ban', '/mute', '/tp', '/tphere', '/broadcast', '/give', '/gbuff', '/spawnmob', '/grow']
+  if (needsArg.some(c => command === c)) {
+    // Focus the input so user can add arguments
+    nextTick(() => {
+      inputRef.value?.focus()
+    })
+    return
+  }
   nextTick(() => {
     sendCurrentCommand()
   })
@@ -279,11 +316,24 @@ watch(historyLines, () => {
 
 .console-input {
   border-top: 1px solid var(--border-color);
-  padding: 12px;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   background-color: var(--bg-card);
+}
+
+.command-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.command-label {
+  font-size: 11px;
+  color: var(--text-muted, #808080);
+  min-width: 28px;
+  font-weight: 600;
 }
 
 .input-row {

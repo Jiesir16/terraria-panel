@@ -20,6 +20,7 @@ use crate::{
 pub struct OperationLog {
     pub id: i64,
     pub user_id: Option<String>,
+    pub username: Option<String>,
     pub action: String,
     pub target: Option<String>,
     pub details: Option<String>,
@@ -51,6 +52,10 @@ pub async fn list_logs(
         .get("limit")
         .and_then(|s| s.parse().ok())
         .unwrap_or(100);
+    let offset: i64 = params
+        .get("offset")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
 
     let db = state.db.lock().map_err(|_| {
         AppError::InternalServerError("Failed to acquire database lock".to_string())
@@ -58,19 +63,24 @@ pub async fn list_logs(
 
     let mut stmt = db
         .prepare(
-            "SELECT id, user_id, action, target, details, created_at FROM operation_logs ORDER BY created_at DESC LIMIT ?1",
+            "SELECT l.id, l.user_id, u.username, l.action, l.target, l.details, l.created_at
+             FROM operation_logs l
+             LEFT JOIN users u ON u.id = l.user_id
+             ORDER BY l.created_at DESC
+             LIMIT ?1 OFFSET ?2",
         )
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
     let logs = stmt
-        .query_map([limit], |row| {
+        .query_map(params![limit, offset], |row| {
             Ok(OperationLog {
                 id: row.get(0)?,
                 user_id: row.get(1)?,
-                action: row.get(2)?,
-                target: row.get(3)?,
-                details: row.get(4)?,
-                created_at: row.get(5)?,
+                username: row.get(2)?,
+                action: row.get(3)?,
+                target: row.get(4)?,
+                details: row.get(5)?,
+                created_at: row.get(6)?,
             })
         })
         .map_err(|e| AppError::DatabaseError(e.to_string()))?
@@ -165,6 +175,8 @@ pub async fn create_user(
     .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
     tracing::info!(admin = %auth.username, new_user = %req.username, user_id = %user_id, "User created successfully");
+    drop(db);
+    crate::db::log_operation(&state.db, &auth.user_id, "创建用户", Some(&req.username), Some("role=viewer"));
 
     Ok(Json(json!({
         "success": true,
@@ -222,6 +234,8 @@ pub async fn update_user(
     }
 
     tracing::info!(admin = %auth.username, target_user_id = %user_id, "User updated successfully");
+    drop(db);
+    crate::db::log_operation(&state.db, &auth.user_id, "更新用户", Some(&user_id), None);
 
     Ok(Json(json!({
         "success": true,
@@ -257,6 +271,8 @@ pub async fn delete_user(
 
     db.execute("DELETE FROM users WHERE id = ?1", params![user_id])
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+    drop(db);
+    crate::db::log_operation(&state.db, &auth.user_id, "删除用户", Some(&user_id), None);
 
     tracing::info!(admin = %auth.username, target_user_id = %user_id, "User deleted successfully");
 

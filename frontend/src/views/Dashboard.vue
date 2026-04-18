@@ -24,7 +24,12 @@
     </div>
 
     <div class="content-section">
-      <h2>服务器状态</h2>
+      <div class="section-header">
+        <h2>服务器状态</h2>
+        <n-button text type="primary" @click="loadData">
+          刷新
+        </n-button>
+      </div>
       <n-spin :show="loading">
         <div class="servers-grid">
           <server-card
@@ -40,7 +45,12 @@
     </div>
 
     <div class="content-section">
-      <h2>最近操作日志</h2>
+      <div class="section-header">
+        <h2>最近操作日志</h2>
+        <n-button text type="primary" @click="loadData">
+          刷新
+        </n-button>
+      </div>
       <n-spin :show="logsLoading">
         <n-data-table :columns="logColumns" :data="logs" :single-line="false" :bordered="false" />
       </n-spin>
@@ -51,7 +61,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { NSpin, NDataTable } from 'naive-ui'
+import { NSpin, NDataTable, NButton, useDialog } from 'naive-ui'
 import { useServersStore } from '../stores/servers'
 import { systemApi } from '../api/system'
 import { useNotification } from '../composables/useNotification'
@@ -61,6 +71,7 @@ import ServerCard from '../components/server/ServerCard.vue'
 const router = useRouter()
 const serversStore = useServersStore()
 const notification = useNotification()
+const dialog = useDialog()
 
 const loading = ref(false)
 const logsLoading = ref(false)
@@ -68,9 +79,10 @@ const systemLoad = ref('--')
 const logs = ref<any[]>([])
 
 const logColumns = [
-  { title: '操作', key: 'action', width: 100 },
+  { title: '操作', key: 'action', width: 120 },
   { title: '目标', key: 'target', width: 150 },
-  { title: '操作者', key: 'user_id', width: 120 },
+  { title: '详情', key: 'details', width: 200, ellipsis: { tooltip: true } },
+  { title: '操作者', key: 'username', width: 120, render: (row: any) => row.username || row.user_id || '系统' },
   { title: '时间', key: 'created_at', width: 180 }
 ]
 
@@ -107,22 +119,45 @@ async function loadData() {
   }
 }
 
-async function handleStartServer(serverId: string) {
-  try {
-    await serversStore.startServer(serverId)
-    notification.success('服务器已启动', '')
-  } catch (error: any) {
-    notification.error('启动失败', error?.response?.data?.message || '')
-  }
+function getServerName(serverId: string): string {
+  const s = serversStore.servers.find(s => s.id === serverId)
+  return s?.name || serverId
 }
 
-async function handleStopServer(serverId: string) {
-  try {
-    await serversStore.stopServer(serverId)
-    notification.success('服务器已停止', '')
-  } catch (error: any) {
-    notification.error('停止失败', error?.response?.data?.message || '')
-  }
+function handleStartServer(serverId: string) {
+  dialog.warning({
+    title: '确认启动',
+    content: `确定要启动服务器「${getServerName(serverId)}」吗？`,
+    positiveText: '启动',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        const result = await serversStore.startServer(serverId)
+        notification.success('启动请求已发送', result?.message || '服务器正在启动中...')
+        await loadData()
+      } catch (error: any) {
+        notification.error('启动失败', error?.response?.data?.error || '请检查服务器配置和日志')
+      }
+    }
+  })
+}
+
+function handleStopServer(serverId: string) {
+  dialog.warning({
+    title: '确认停止',
+    content: `确定要停止服务器「${getServerName(serverId)}」吗？正在游戏中的玩家将被断开连接。`,
+    positiveText: '停止',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await serversStore.stopServer(serverId)
+        notification.success('服务器已停止', '服务器已安全关闭')
+        await loadData()
+      } catch (error: any) {
+        notification.error('停止失败', error?.response?.data?.error || '')
+      }
+    }
+  })
 }
 
 function goToServerDetail(serverId: string) {
@@ -159,6 +194,13 @@ onMounted(() => {
   margin: 0 0 16px 0;
   color: var(--text-primary);
   font-size: 16px;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
 }
 
 .servers-grid {

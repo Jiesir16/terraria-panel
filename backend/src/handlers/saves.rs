@@ -148,6 +148,14 @@ pub async fn upload_save(
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
         tracing::info!(user = %auth.username, save_id = %save.id, "Save uploaded successfully");
+        drop(db);
+        crate::db::log_operation(
+            &state.db,
+            &auth.user_id,
+            "上传存档",
+            Some(&save.name),
+            Some(&format!("大小: {} bytes", save.file_size)),
+        );
 
         return Ok(Json(json!({
             "success": true,
@@ -211,6 +219,13 @@ pub async fn import_save(
         server_id = %server_id,
         world_name = %save_name,
         "Save imported successfully"
+    );
+    crate::db::log_operation(
+        &state.db,
+        &auth.user_id,
+        "导入存档",
+        Some(&server_id),
+        Some(&format!("存档: {} -> {}", save_name, imported_world_name)),
     );
 
     Ok(Json(json!({
@@ -303,6 +318,7 @@ pub async fn delete_save(
     }
 
     tracing::info!(save_id = %save_id, "Save deleted successfully");
+    crate::db::log_operation(&state.db, &auth.user_id, "删除存档", Some(&save_id), Some(&file_path));
 
     Ok(Json(json!({
         "success": true,
@@ -364,6 +380,14 @@ pub async fn backup_server(
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
         tracing::info!(server_id = %server_id, world_name = %world_name, "Server backed up successfully");
+        drop(db);
+        crate::db::log_operation(
+            &state.db,
+            &auth.user_id,
+            "手动备份存档",
+            Some(&server_id),
+            Some(&world_name),
+        );
 
         Ok(Json(json!({
             "success": true,

@@ -93,6 +93,13 @@ pub async fn download_version(
         })?;
 
     tracing::info!(version = %req.tag_name, "Version downloaded successfully");
+    crate::db::log_operation(
+        &state.db,
+        &auth.user_id,
+        "下载版本",
+        Some(&req.tag_name),
+        Some(&req.download_url),
+    );
 
     Ok(Json(json!({
         "success": true,
@@ -123,6 +130,7 @@ pub async fn delete_version(
         })?;
 
     tracing::info!(version = %version, "Version deleted successfully");
+    crate::db::log_operation(&state.db, &auth.user_id, "删除版本", Some(&version), None);
 
     Ok(Json(json!({
         "success": true,
@@ -157,6 +165,7 @@ pub async fn set_proxy(
     tracing::info!(user = %auth.username, mirror = %mirror, "Updating GitHub mirror/proxy");
 
     state.version_manager.set_github_mirror(mirror.clone()).await;
+    crate::db::log_operation(&state.db, &auth.user_id, "更新代理设置", None, Some(&mirror));
 
     Ok(Json(json!({
         "success": true,

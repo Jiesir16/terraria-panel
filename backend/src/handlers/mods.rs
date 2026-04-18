@@ -81,6 +81,7 @@ pub async fn upload_mod(
     }
 
     tracing::info!(user = %auth.username, server_id = %server_id, "Mod uploaded successfully");
+    crate::db::log_operation(&state.db, &auth.user_id, "上传模组", Some(&server_id), None);
 
     Ok(Json(json!({
         "success": true,
@@ -107,6 +108,7 @@ pub async fn toggle_mod(
         .map_err(|e| AppError::InternalServerError(e.to_string()))?;
 
     tracing::info!(server_id = %server_id, mod_name = %mod_name, "Mod toggled successfully");
+    crate::db::log_operation(&state.db, &auth.user_id, "切换模组", Some(&server_id), Some(&mod_name));
 
     Ok(Json(json!({
         "success": true,
@@ -133,6 +135,7 @@ pub async fn delete_mod(
         .map_err(|e| AppError::InternalServerError(e.to_string()))?;
 
     tracing::info!(server_id = %server_id, mod_name = %mod_name, "Mod deleted successfully");
+    crate::db::log_operation(&state.db, &auth.user_id, "删除模组", Some(&server_id), Some(&mod_name));
 
     Ok(Json(json!({
         "success": true,

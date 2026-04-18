@@ -60,9 +60,12 @@
         </n-form-item>
 
         <n-form-item label="自动创建世界" path="auto_create">
-          <n-checkbox v-model:checked="formData.auto_create">
+          <n-checkbox v-model:checked="formData.auto_create" :disabled="usingExistingWorld">
             没有存档时自动创建新世界
           </n-checkbox>
+          <div v-if="usingExistingWorld" class="field-hint">
+            当前已选择现有存档。自动创建、世界大小、难度和种子只会在“没有存档并创建新世界”时生效。
+          </div>
         </n-form-item>
 
         <n-form-item label="世界大小" path="world_size">
@@ -70,6 +73,7 @@
             v-model:value="worldSize"
             :options="worldSizeOptions"
             placeholder="选择世界大小"
+            :disabled="usingExistingWorld"
             @update:value="handleWorldSizeChange"
           />
         </n-form-item>
@@ -77,12 +81,12 @@
         <n-grid :cols="2" :x-gap="12">
           <n-grid-item>
             <n-form-item label="宽度" path="world_width" label-placement="left">
-              <n-input-number v-model:value="formData.world_width" :min="400" :max="16800" style="width: 100%;" />
+              <n-input-number v-model:value="formData.world_width" :min="400" :max="16800" :disabled="usingExistingWorld" style="width: 100%;" />
             </n-form-item>
           </n-grid-item>
           <n-grid-item>
             <n-form-item label="高度" path="world_height" label-placement="left">
-              <n-input-number v-model:value="formData.world_height" :min="400" :max="4800" style="width: 100%;" />
+              <n-input-number v-model:value="formData.world_height" :min="400" :max="4800" :disabled="usingExistingWorld" style="width: 100%;" />
             </n-form-item>
           </n-grid-item>
         </n-grid>
@@ -91,12 +95,13 @@
           <n-select
             v-model:value="formData.difficulty"
             :options="difficultyOptions"
+            :disabled="usingExistingWorld"
             placeholder="选择游戏难度"
           />
         </n-form-item>
 
         <n-form-item label="世界种子" path="seed">
-          <n-input v-model:value="formData.seed" placeholder="留空则随机生成" />
+          <n-input v-model:value="formData.seed" :disabled="usingExistingWorld" placeholder="留空则随机生成" />
         </n-form-item>
 
         <!-- 游戏规则 -->
@@ -244,7 +249,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { NSpin, NForm, NFormItem, NInput, NInputNumber, NSelect, NCheckbox, NButton, NDivider, NGrid, NGridItem, NSpace } from 'naive-ui'
 import { useServersStore } from '../../stores/servers'
 import { serverApi } from '../../api/server'
@@ -335,6 +340,13 @@ const forceTimeOptions = [
 const selectedWorldFile = ref<string | null>(null)
 const worldFileOptions = ref<{ label: string; value: string }[]>([])
 const worldFilesLoading = ref(false)
+const usingExistingWorld = computed(() => {
+  const worldName = formData.value.world_name?.trim()
+  if (!worldName) {
+    return false
+  }
+  return worldFileOptions.value.some(option => option.value === worldName)
+})
 
 async function loadWorldFiles() {
   worldFilesLoading.value = true
@@ -459,7 +471,12 @@ async function handleSave() {
       password: formData.value.server_password || undefined,
       max_players: formData.value.max_players || undefined,
     })
-    notification.success('配置已保存', '下次启动服务器时生效')
+    notification.success(
+      '配置已保存',
+      usingExistingWorld.value
+        ? '已选择现有存档；世界大小、难度和种子不会改写现有地图，只会在新建世界时生效'
+        : '下次启动服务器时生效'
+    )
   } catch (error: any) {
     notification.error('保存失败', error?.response?.data?.message || '')
   } finally {

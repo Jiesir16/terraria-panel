@@ -119,6 +119,8 @@ pub async fn update_config(
 
     tracing::info!(server_id = %server_id, "Config updated (panel + TShock config.json)");
 
+    crate::db::log_operation(&state.db, &auth.user_id, "更新配置", Some(&server_id), None);
+
     Ok(Json(json!({
         "success": true,
         "message": "Config updated successfully"

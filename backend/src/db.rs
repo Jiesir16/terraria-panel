@@ -79,6 +79,20 @@ fn init_schema(conn: &Connection) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Log an operation to the operation_logs table.
+/// This is a best-effort function — it logs errors but doesn't propagate them.
+pub fn log_operation(db: &DbPool, user_id: &str, action: &str, target: Option<&str>, details: Option<&str>) {
+    let now = Utc::now().to_rfc3339();
+    if let Ok(conn) = db.lock() {
+        let _ = conn.execute(
+            "INSERT INTO operation_logs (user_id, action, target, details, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![user_id, action, target, details, now],
+        ).map_err(|e| {
+            tracing::error!(error = %e, "Failed to write operation log");
+        });
+    }
+}
+
 fn create_default_admin(conn: &Connection) -> Result<(), AppError> {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM users WHERE role = 'admin'", [], |row| {
