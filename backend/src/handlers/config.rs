@@ -18,31 +18,41 @@ pub async fn get_config(
 ) -> Result<Json<ServerConfig>, AppError> {
     tracing::debug!(server_id = %server_id, "Reading server config");
 
-    let config_path = state
+    let config_dir = state
         .config
         .server
         .data_dir
         .join("servers")
         .join(&server_id)
-        .join("tshock")
-        .join("config.json");
+        .join("tshock");
 
-    if !config_path.exists() {
-        tracing::debug!(server_id = %server_id, "Config file not found, returning defaults");
-        return Ok(Json(ServerConfig::default()));
+    // Try reading panel-config.json first (our format), fallback to config.json
+    let panel_config_path = config_dir.join("panel-config.json");
+    let config_path = config_dir.join("config.json");
+
+    if panel_config_path.exists() {
+        let config_str = std::fs::read_to_string(&panel_config_path)
+            .map_err(|e| AppError::FileError(e.to_string()))?;
+        let config: ServerConfig = serde_json::from_str(&config_str)
+            .map_err(|e| {
+                tracing::error!(server_id = %server_id, error = %e, "Failed to parse panel-config.json");
+                AppError::BadRequest(format!("Invalid JSON: {}", e))
+            })?;
+        return Ok(Json(config));
     }
 
-    let config_str = std::fs::read_to_string(&config_path)
-        .map_err(|e| AppError::FileError(e.to_string()))?;
+    if config_path.exists() {
+        // Try to parse as our format (backward compat)
+        let config_str = std::fs::read_to_string(&config_path)
+            .map_err(|e| AppError::FileError(e.to_string()))?;
+        if let Ok(config) = serde_json::from_str::<ServerConfig>(&config_str) {
+            return Ok(Json(config));
+        }
+        tracing::debug!(server_id = %server_id, "config.json not in panel format, returning defaults");
+    }
 
-    let config: ServerConfig = serde_json::from_str(&config_str)
-        .map_err(|e| {
-            tracing::error!(server_id = %server_id, error = %e, "Failed to parse config.json");
-            AppError::BadRequest(format!("Invalid JSON: {}", e))
-        })?;
-
-    tracing::debug!(server_id = %server_id, "Config loaded successfully");
-    Ok(Json(config))
+    tracing::debug!(server_id = %server_id, "Config file not found, returning defaults");
+    Ok(Json(ServerConfig::default()))
 }
 
 pub async fn update_config(
@@ -70,14 +80,44 @@ pub async fn update_config(
     std::fs::create_dir_all(&config_dir)
         .map_err(|e| AppError::FileError(e.to_string()))?;
 
-    let config_path = config_dir.join("config.json");
-    let config_json = serde_json::to_string_pretty(&config)
+    // Save our panel config as panel-config.json (for UI round-trip)
+    let panel_config_path = config_dir.join("panel-config.json");
+    let panel_json = serde_json::to_string_pretty(&config)
         .map_err(|e| AppError::BadRequest(format!("Invalid config: {}", e)))?;
-
-    std::fs::write(&config_path, config_json)
+    std::fs::write(&panel_config_path, panel_json)
         .map_err(|e| AppError::FileError(e.to_string()))?;
 
-    tracing::info!(server_id = %server_id, path = %config_path.display(), "Config updated successfully");
+    // Also sync to TShock's config.json in { "Settings": { ... } } format
+    let tshock_config_path = config_dir.join("config.json");
+    let mut tshock_config = if tshock_config_path.exists() {
+        let content = std::fs::read_to_string(&tshock_config_path)
+            .map_err(|e| AppError::FileError(e.to_string()))?;
+        serde_json::from_str::<serde_json::Value>(&content).unwrap_or_else(|_| json!({}))
+    } else {
+        json!({})
+    };
+
+    if !tshock_config.is_object() {
+        tshock_config = json!({});
+    }
+
+    let settings = tshock_config
+        .as_object_mut()
+        .unwrap()
+        .entry("Settings")
+        .or_insert_with(|| json!({}));
+    if !settings.is_object() {
+        *settings = json!({});
+    }
+    let settings_obj = settings.as_object_mut().unwrap();
+    config.apply_to_tshock_settings(settings_obj);
+
+    let tshock_json = serde_json::to_string_pretty(&tshock_config)
+        .map_err(|e| AppError::BadRequest(format!("Failed to serialize: {}", e)))?;
+    std::fs::write(&tshock_config_path, tshock_json)
+        .map_err(|e| AppError::FileError(e.to_string()))?;
+
+    tracing::info!(server_id = %server_id, "Config updated (panel + TShock config.json)");
 
     Ok(Json(json!({
         "success": true,

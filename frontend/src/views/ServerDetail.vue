@@ -100,7 +100,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { NSpin, NTabs, NTabPane, NButton, useDialog } from 'naive-ui'
 import { useServersStore } from '../stores/servers'
@@ -119,7 +119,7 @@ const serversStore = useServersStore()
 const notification = useNotification()
 const dialog = useDialog()
 
-const serverId = route.params.id as string
+const serverId = computed(() => route.params.id as string)
 const loading = ref(false)
 const modsLoading = ref(false)
 const savesLoading = ref(false)
@@ -132,10 +132,27 @@ const currentServer = computed(() => serversStore.currentServer)
 
 const isCurrentServerActive = computed(() => currentServer.value?.status !== 'stopped')
 
+function setupStatusPoll() {
+  if (statusPollTimer) {
+    clearInterval(statusPollTimer)
+  }
+  statusPollTimer = setInterval(() => {
+    serversStore.refreshServerRuntime(serverId.value).catch(() => {})
+  }, 5000)
+}
+
+// Watch for route param changes (e.g. navigating from server 1 to server 2)
+watch(serverId, () => {
+  loadServer()
+  loadMods()
+  loadSaves()
+  setupStatusPoll()
+})
+
 async function loadServer() {
   loading.value = true
   try {
-    await serversStore.refreshServerRuntime(serverId)
+    await serversStore.refreshServerRuntime(serverId.value)
   } catch (error) {
     notification.error('加载服务器失败', '')
   } finally {
@@ -151,7 +168,7 @@ async function handleRefresh() {
 async function loadMods() {
   modsLoading.value = true
   try {
-    const response = await modsApi.getList(serverId)
+    const response = await modsApi.getList(serverId.value)
     mods.value = response.data
   } catch (error) {
     notification.error('加载 Mod 失败', '')
@@ -180,13 +197,13 @@ const restartLoading = ref(false)
 function handleStart() {
   dialog.warning({
     title: '确认启动',
-    content: `确定要启动服务器「${currentServer.value?.name || serverId}」吗？`,
+    content: `确定要启动服务器「${currentServer.value?.name || serverId.value}」吗？`,
     positiveText: '启动',
     negativeText: '取消',
     onPositiveClick: async () => {
       startLoading.value = true
       try {
-        const result = await serversStore.startServer(serverId)
+        const result = await serversStore.startServer(serverId.value)
         notification.success('启动请求已发送', result?.message || '服务器正在启动中...')
         await loadServer()
       } catch (error: any) {
@@ -201,13 +218,13 @@ function handleStart() {
 function handleStop() {
   dialog.warning({
     title: '确认停止',
-    content: `确定要停止服务器「${currentServer.value?.name || serverId}」吗？正在游戏中的玩家将被断开连接。`,
+    content: `确定要停止服务器「${currentServer.value?.name || serverId.value}」吗？正在游戏中的玩家将被断开连接。`,
     positiveText: '停止',
     negativeText: '取消',
     onPositiveClick: async () => {
       stopLoading.value = true
       try {
-        await serversStore.stopServer(serverId)
+        await serversStore.stopServer(serverId.value)
         notification.success('服务器已停止', '服务器已安全关闭')
         await loadServer()
       } catch (error: any) {
@@ -222,13 +239,13 @@ function handleStop() {
 function handleKill() {
   dialog.error({
     title: '确认强制结束',
-    content: `确定要强制结束服务器「${currentServer.value?.name || serverId}」吗？这可能导致未保存的数据丢失！建议先尝试正常停止。`,
+    content: `确定要强制结束服务器「${currentServer.value?.name || serverId.value}」吗？这可能导致未保存的数据丢失！建议先尝试正常停止。`,
     positiveText: '强制结束',
     negativeText: '取消',
     onPositiveClick: async () => {
       killLoading.value = true
       try {
-        const result = await serversStore.killServer(serverId)
+        const result = await serversStore.killServer(serverId.value)
         notification.success('强制结束信号已发送', result?.message || '进程已被终止')
         await loadServer()
       } catch (error: any) {
@@ -243,13 +260,13 @@ function handleKill() {
 function handleRestart() {
   dialog.warning({
     title: '确认重启',
-    content: `确定要重启服务器「${currentServer.value?.name || serverId}」吗？正在游戏中的玩家将被短暂断开。`,
+    content: `确定要重启服务器「${currentServer.value?.name || serverId.value}」吗？正在游戏中的玩家将被短暂断开。`,
     positiveText: '重启',
     negativeText: '取消',
     onPositiveClick: async () => {
       restartLoading.value = true
       try {
-        await serversStore.restartServer(serverId)
+        await serversStore.restartServer(serverId.value)
         notification.success('服务器已重启', '服务器正在重新启动中...')
         await loadServer()
       } catch (error: any) {
@@ -263,7 +280,7 @@ function handleRestart() {
 
 async function handleToggleMod(modName: string) {
   try {
-    await modsApi.toggle(serverId, modName)
+    await modsApi.toggle(serverId.value, modName)
     notification.success('Mod 状态已切换', '')
     loadMods()
   } catch (error: any) {
@@ -273,7 +290,7 @@ async function handleToggleMod(modName: string) {
 
 async function handleDeleteMod(modName: string) {
   try {
-    await modsApi.delete(serverId, modName)
+    await modsApi.delete(serverId.value, modName)
     notification.success('Mod 已删除', '')
     loadMods()
   } catch (error: any) {
@@ -283,7 +300,7 @@ async function handleDeleteMod(modName: string) {
 
 async function handleImportSave(saveId: string) {
   try {
-    await savesApi.importToServer(saveId, serverId)
+    await savesApi.importToServer(saveId, serverId.value)
     notification.success('存档已导入，并设为启动世界', '')
     await loadServer()
     loadSaves()
@@ -319,7 +336,7 @@ async function handleDeleteSave(saveId: string) {
 
 async function handleBackup() {
   try {
-    await savesApi.backup(serverId)
+    await savesApi.backup(serverId.value)
     notification.success('备份已创建', '')
     loadSaves()
   } catch (error: any) {
@@ -331,10 +348,7 @@ onMounted(() => {
   loadServer()
   loadMods()
   loadSaves()
-  // Poll server status every 5 seconds to keep UI in sync
-  statusPollTimer = setInterval(() => {
-    serversStore.refreshServerRuntime(serverId).catch(() => {})
-  }, 5000)
+  setupStatusPoll()
 })
 
 onUnmounted(() => {
