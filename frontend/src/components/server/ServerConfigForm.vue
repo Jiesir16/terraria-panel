@@ -32,8 +32,27 @@
           世界设置
         </n-divider>
 
+        <n-form-item label="选择存档" path="world_file">
+          <div style="display: flex; gap: 8px; width: 100%;">
+            <n-select
+              v-model:value="selectedWorldFile"
+              :options="worldFileOptions"
+              placeholder="选择已有的世界存档"
+              clearable
+              @update:value="handleWorldFileSelect"
+              style="flex: 1;"
+            />
+            <n-button text type="primary" size="small" @click="loadWorldFiles" :loading="worldFilesLoading">
+              刷新
+            </n-button>
+          </div>
+          <div v-if="worldFileOptions.length === 0 && !worldFilesLoading" style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+            暂无存档，请先在"存档"页上传或导入 .wld 文件
+          </div>
+        </n-form-item>
+
         <n-form-item label="世界名称" path="world_name">
-          <n-input v-model:value="formData.world_name" placeholder="世界名称" />
+          <n-input v-model:value="formData.world_name" placeholder="世界名称（选择存档后自动填充）" />
         </n-form-item>
 
         <n-form-item label="自动创建世界" path="auto_create">
@@ -97,6 +116,7 @@
 import { ref, onMounted } from 'vue'
 import { NSpin, NForm, NFormItem, NInput, NInputNumber, NSelect, NCheckbox, NButton, NDivider, NGrid, NGridItem } from 'naive-ui'
 import { useServersStore } from '../../stores/servers'
+import { serverApi } from '../../api/server'
 import { useNotification } from '../../composables/useNotification'
 
 interface Props {
@@ -140,6 +160,53 @@ const difficultyOptions = [
   { label: '旅途 (Journey)', value: 3 }
 ]
 
+// World file selection
+const selectedWorldFile = ref<string | null>(null)
+const worldFileOptions = ref<{ label: string; value: string }[]>([])
+const worldFilesLoading = ref(false)
+
+async function loadWorldFiles() {
+  worldFilesLoading.value = true
+  try {
+    const response = await serverApi.listWorlds(props.serverId)
+    worldFileOptions.value = response.data
+      .filter((w: any) => !w.is_backup)
+      .map((w: any) => ({
+        label: `${w.name} (${formatWorldSize(w.size)}, ${w.modified})`,
+        value: w.name
+      }))
+    // Also include backups as a separate group
+    const backups = response.data
+      .filter((w: any) => w.is_backup)
+      .map((w: any) => ({
+        label: `[备份] ${w.name} (${formatWorldSize(w.size)}, ${w.modified})`,
+        value: w.name
+      }))
+    worldFileOptions.value = [...worldFileOptions.value, ...backups]
+  } catch {
+    // silently fail
+  } finally {
+    worldFilesLoading.value = false
+  }
+}
+
+function formatWorldSize(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
+}
+
+function handleWorldFileSelect(val: string | null) {
+  if (val) {
+    // Set world_name to the selected file (without .wld extension for display)
+    formData.value.world_name = val
+    // If a world file is selected, no need for autocreate
+    formData.value.auto_create = false
+  }
+}
+
 // Compute world size preset from width/height
 const worldSize = ref(2)
 
@@ -182,6 +249,10 @@ async function loadConfig() {
       npc_spawn_protection_radius: config.npc_spawn_protection_radius ?? 300,
     }
     worldSize.value = detectWorldSize(formData.value.world_width, formData.value.world_height)
+    // Pre-select world file if world_name matches an existing file
+    if (formData.value.world_name) {
+      selectedWorldFile.value = formData.value.world_name
+    }
   } catch (error) {
     notification.error('加载配置失败', '')
   } finally {
@@ -192,8 +263,16 @@ async function loadConfig() {
 async function handleSave() {
   saving.value = true
   try {
+    // Save TShock config (config.json settings)
     await serversStore.updateConfig(props.serverId, formData.value as any)
-    notification.success('配置已保存', '')
+    // Also update server-level fields in database (world_name, port, password, max_players)
+    await serversStore.updateServer(props.serverId, {
+      world_name: formData.value.world_name || undefined,
+      port: formData.value.port || undefined,
+      password: formData.value.server_password || undefined,
+      max_players: formData.value.max_players || undefined,
+    })
+    notification.success('配置已保存', '下次启动服务器时生效')
   } catch (error: any) {
     notification.error('保存失败', error?.response?.data?.message || '')
   } finally {
@@ -203,6 +282,7 @@ async function handleSave() {
 
 onMounted(() => {
   loadConfig()
+  loadWorldFiles()
 })
 </script>
 

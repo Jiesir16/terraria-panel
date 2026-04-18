@@ -29,7 +29,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, h } from 'vue'
 import { useRouter } from 'vue-router'
-import { NButton, NSpin, NDataTable, NSpace } from 'naive-ui'
+import { NButton, NSpin, NDataTable, NSpace, useDialog } from 'naive-ui'
 import { useServersStore } from '../stores/servers'
 import { useNotification } from '../composables/useNotification'
 import CreateServerModal from '../components/server/CreateServerModal.vue'
@@ -38,6 +38,7 @@ import ServerStatusBadge from '../components/server/ServerStatusBadge.vue'
 const router = useRouter()
 const serversStore = useServersStore()
 const notification = useNotification()
+const dialog = useDialog()
 
 const showCreateModal = ref(false)
 const loading = ref(false)
@@ -145,43 +146,81 @@ async function loadServers() {
   }
 }
 
-async function handleStart(serverId: string) {
-  try {
-    const result = await serversStore.startServer(serverId)
-    notification.success('启动请求已发送', result?.message || '')
-    await loadServers()
-  } catch (error: any) {
-    notification.error('启动失败', error?.response?.data?.error || '')
-  }
+function getServerName(serverId: string): string {
+  const s = serversStore.servers.find(s => s.id === serverId)
+  return s?.name || serverId
 }
 
-async function handleStop(serverId: string) {
-  try {
-    await serversStore.stopServer(serverId)
-    notification.success('服务器已停止', '')
-    await loadServers()
-  } catch (error: any) {
-    notification.error('停止失败', error?.response?.data?.error || '')
-  }
+function handleStart(serverId: string) {
+  dialog.warning({
+    title: '确认启动',
+    content: `确定要启动服务器「${getServerName(serverId)}」吗？`,
+    positiveText: '启动',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        const result = await serversStore.startServer(serverId)
+        notification.success('启动请求已发送', result?.message || '服务器正在启动中...')
+        await loadServers()
+      } catch (error: any) {
+        notification.error('启动失败', error?.response?.data?.error || '请检查服务器配置和日志')
+      }
+    }
+  })
 }
 
-async function handleKill(serverId: string) {
-  try {
-    const result = await serversStore.killServer(serverId)
-    notification.success('强制结束信号已发送', result?.message || '')
-    await loadServers()
-  } catch (error: any) {
-    notification.error('强制结束失败', error?.response?.data?.error || '')
-  }
+function handleStop(serverId: string) {
+  dialog.warning({
+    title: '确认停止',
+    content: `确定要停止服务器「${getServerName(serverId)}」吗？正在游戏中的玩家将被断开连接。`,
+    positiveText: '停止',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await serversStore.stopServer(serverId)
+        notification.success('服务器已停止', '服务器已安全关闭')
+        await loadServers()
+      } catch (error: any) {
+        notification.error('停止失败', error?.response?.data?.error || '')
+      }
+    }
+  })
 }
 
-async function handleDelete(serverId: string) {
-  try {
-    await serversStore.deleteServer(serverId)
-    notification.success('服务器已删除', '')
-  } catch (error: any) {
-    notification.error('删除失败', error?.response?.data?.message || '')
-  }
+function handleKill(serverId: string) {
+  dialog.error({
+    title: '确认强制结束',
+    content: `确定要强制结束服务器「${getServerName(serverId)}」吗？这可能导致未保存的数据丢失！建议先尝试正常停止。`,
+    positiveText: '强制结束',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        const result = await serversStore.killServer(serverId)
+        notification.success('强制结束信号已发送', result?.message || '进程已被终止')
+        await loadServers()
+      } catch (error: any) {
+        notification.error('强制结束失败', error?.response?.data?.error || '')
+      }
+    }
+  })
+}
+
+function handleDelete(serverId: string) {
+  dialog.error({
+    title: '确认删除',
+    content: `确定要删除服务器「${getServerName(serverId)}」吗？此操作不可撤销，服务器的所有配置和数据将被移除。`,
+    positiveText: '确认删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await serversStore.deleteServer(serverId)
+        notification.success('服务器已删除', '')
+        await loadServers()
+      } catch (error: any) {
+        notification.error('删除失败', error?.response?.data?.message || '')
+      }
+    }
+  })
 }
 
 function handleServerCreated() {

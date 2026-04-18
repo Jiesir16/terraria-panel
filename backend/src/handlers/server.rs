@@ -216,15 +216,25 @@ fn sync_tshock_runtime_config(
         config = serde_json::json!({});
     }
 
-    let obj = config
+    // TShock v5/v6 config.json uses a nested "Settings" object:
+    //   { "Settings": { "ServerPassword": "xxx", "ServerPort": 7777, ... } }
+    // We must write into "Settings", not at root level.
+    let settings = config
         .as_object_mut()
-        .ok_or_else(|| AppError::BadRequest("Invalid TShock config format".to_string()))?;
+        .ok_or_else(|| AppError::BadRequest("Invalid TShock config format".to_string()))?
+        .entry("Settings")
+        .or_insert_with(|| serde_json::json!({}));
 
-    obj.insert("ServerPort".to_string(), serde_json::json!(port));
-    obj.insert("MaxSlots".to_string(), serde_json::json!(max_players));
-    obj.insert("ServerName".to_string(), serde_json::json!(server_name));
-    obj.insert("UseServerName".to_string(), serde_json::json!(true));
-    obj.insert(
+    if !settings.is_object() {
+        *settings = serde_json::json!({});
+    }
+
+    let settings_obj = settings.as_object_mut().unwrap();
+    settings_obj.insert("ServerPort".to_string(), serde_json::json!(port));
+    settings_obj.insert("MaxSlots".to_string(), serde_json::json!(max_players));
+    settings_obj.insert("ServerName".to_string(), serde_json::json!(server_name));
+    settings_obj.insert("UseServerName".to_string(), serde_json::json!(true));
+    settings_obj.insert(
         "ServerPassword".to_string(),
         serde_json::json!(password.clone().unwrap_or_default()),
     );
@@ -233,6 +243,12 @@ fn sync_tshock_runtime_config(
         .map_err(|e| AppError::BadRequest(format!("Failed to serialize TShock config: {}", e)))?;
     std::fs::write(&config_path, content)
         .map_err(|e| AppError::FileError(format!("Failed to write config.json: {}", e)))?;
+
+    tracing::info!(
+        config_path = %config_path.display(),
+        has_password = password.is_some(),
+        "Synced TShock runtime config (Settings section)"
+    );
 
     Ok(())
 }
