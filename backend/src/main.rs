@@ -99,6 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/servers/:id/command", post(handlers::server::send_command))
         .route("/api/servers/:id/status", get(handlers::server::server_status))
         .route("/api/servers/:id/worlds", get(handlers::server::list_worlds))
+        .route("/api/servers/:id/tshock-security", get(handlers::server::tshock_security_overview))
         .route("/api/servers/:id/logs", get(handlers::console::recent_logs))
         .route("/api/servers/:id/console", get(handlers::console::ws_console))
         // Version endpoints

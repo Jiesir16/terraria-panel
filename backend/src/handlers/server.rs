@@ -3,14 +3,18 @@ use axum::{
     Json,
 };
 use serde_json::json;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 use chrono::Utc;
-use rusqlite::params;
+use rusqlite::{params, Connection};
 
 use crate::{
     auth::Auth,
     error::AppError,
-    models::{CreateServerRequest, UpdateServerRequest, Server, ServerConfig, ServerDetail, CommandRequest},
+    models::{
+        CreateServerRequest, UpdateServerRequest, Server, ServerConfig, ServerDetail, CommandRequest,
+        TShockSecurityOverview, TShockGroupSummary, TShockUserAccount,
+    },
     handlers::AppState,
 };
 
@@ -356,6 +360,176 @@ fn load_server_detail_from_db(state: &AppState, id: &str) -> Result<ServerDetail
     })
 }
 
+fn load_tshock_security_overview(
+    state: &AppState,
+    server_id: &str,
+) -> Result<TShockSecurityOverview, AppError> {
+    let config_dir = state
+        .config
+        .server
+        .data_dir
+        .join("servers")
+        .join(server_id)
+        .join("tshock");
+
+    let config_json_path = config_dir.join("config.json");
+    let ssc_config_path = config_dir.join("sscconfig.json");
+    let sqlite_path = config_dir.join("tshock.sqlite");
+
+    let config_json = if config_json_path.exists() {
+        let content = std::fs::read_to_string(&config_json_path)
+            .map_err(|e| AppError::FileError(format!("Failed to read config.json: {}", e)))?;
+        serde_json::from_str::<serde_json::Value>(&content).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let settings = config_json
+        .get("Settings")
+        .and_then(|v| v.as_object())
+        .or_else(|| config_json.as_object());
+
+    let default_registration_group = settings
+        .and_then(|s| s.get("DefaultRegistrationGroupName"))
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+    let default_guest_group = settings
+        .and_then(|s| s.get("DefaultGuestGroupName"))
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+    let main_config_ssc = settings
+        .and_then(|s| s.get("ServerSideCharacter"))
+        .and_then(|v| v.as_bool());
+
+    let (ssc_enabled, ssc_source) = if ssc_config_path.exists() {
+        let content = std::fs::read_to_string(&ssc_config_path)
+            .map_err(|e| AppError::FileError(format!("Failed to read sscconfig.json: {}", e)))?;
+        let value = serde_json::from_str::<serde_json::Value>(&content)
+            .unwrap_or_else(|_| serde_json::json!({}));
+        let enabled = value
+            .get("Enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        (enabled, "sscconfig.json".to_string())
+    } else {
+        (main_config_ssc.unwrap_or(false), "config.json".to_string())
+    };
+
+    if !sqlite_path.exists() {
+        return Ok(TShockSecurityOverview {
+            ssc_enabled,
+            ssc_source,
+            default_registration_group,
+            default_guest_group,
+            database_exists: false,
+            users: Vec::new(),
+            groups: Vec::new(),
+        });
+    }
+
+    let conn = Connection::open(&sqlite_path)
+        .map_err(|e| AppError::DatabaseError(format!("Failed to open tshock.sqlite: {}", e)))?;
+
+    let user_rows = {
+        let mut stmt = conn
+            .prepare("SELECT Username, Usergroup FROM Users ORDER BY Username")
+            .map_err(|e| AppError::DatabaseError(format!("Failed to query Users table: {}", e)))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        })
+        .map_err(|e| AppError::DatabaseError(format!("Failed to read Users rows: {}", e)))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to collect Users rows: {}", e)))?
+    };
+
+    let permission_rows = {
+        let mut stmt = conn
+            .prepare("SELECT GroupName, Permission FROM GroupPermissions ORDER BY GroupName, Permission")
+            .map_err(|e| AppError::DatabaseError(format!("Failed to query GroupPermissions table: {}", e)))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+            ))
+        })
+        .map_err(|e| AppError::DatabaseError(format!("Failed to read GroupPermissions rows: {}", e)))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to collect GroupPermissions rows: {}", e)))?
+    };
+
+    let mut group_permissions: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (group_name, permission) in permission_rows {
+        group_permissions
+            .entry(group_name)
+            .or_default()
+            .insert(permission);
+    }
+
+    for (_, group_name) in &user_rows {
+        if let Some(group_name) = group_name {
+            group_permissions.entry(group_name.clone()).or_default();
+        }
+    }
+
+    let users = user_rows
+        .into_iter()
+        .map(|(username, group_name)| {
+            let normalized_group = group_name
+                .as_deref()
+                .map(|g| g.to_ascii_lowercase());
+            let ignores_ssc = group_name
+                .as_ref()
+                .and_then(|g| group_permissions.get(g))
+                .map(|perms| perms.contains("tshock.ignore.ssc"))
+                .unwrap_or(false);
+
+            TShockUserAccount {
+                username,
+                is_superadmin: normalized_group.as_deref() == Some("superadmin"),
+                ignores_ssc,
+                group_name,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let groups = group_permissions
+        .into_iter()
+        .map(|(name, permissions)| {
+            let lower_name = name.to_ascii_lowercase();
+            TShockGroupSummary {
+                permission_count: permissions.len(),
+                ignores_ssc: permissions.contains("tshock.ignore.ssc"),
+                is_registration_group: default_registration_group
+                    .as_deref()
+                    .map(|g| g.eq_ignore_ascii_case(&name))
+                    .unwrap_or(false),
+                is_guest_group: default_guest_group
+                    .as_deref()
+                    .map(|g| g.eq_ignore_ascii_case(&name))
+                    .unwrap_or(false),
+                name: if lower_name == "superadmin" {
+                    "superadmin".to_string()
+                } else {
+                    name
+                },
+            }
+        })
+        .collect::<Vec<_>>();
+
+    Ok(TShockSecurityOverview {
+        ssc_enabled,
+        ssc_source,
+        default_registration_group,
+        default_guest_group,
+        database_exists: true,
+        users,
+        groups,
+    })
+}
+
 pub async fn list_servers(
     State(state): State<AppState>,
     _auth: Auth,
@@ -492,6 +666,23 @@ pub async fn get_server(
     }
 
     Ok(Json(detail))
+}
+
+pub async fn tshock_security_overview(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(id): Path<String>,
+) -> Result<Json<TShockSecurityOverview>, AppError> {
+    if !auth.is_operator_or_admin() {
+        return Err(AppError::Forbidden(
+            "Only operators and admins can view TShock users and groups".to_string(),
+        ));
+    }
+
+    // Reuse the server existence check so we return a clean 404 for deleted servers.
+    let _ = load_server_detail_from_db(&state, &id)?;
+    let overview = load_tshock_security_overview(&state, &id)?;
+    Ok(Json(overview))
 }
 
 pub async fn update_server(

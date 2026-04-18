@@ -66,6 +66,31 @@ export interface ServerConfig {
   [key: string]: any
 }
 
+export interface TShockUserAccount {
+  username: string
+  group_name?: string
+  is_superadmin: boolean
+  ignores_ssc: boolean
+}
+
+export interface TShockGroupSummary {
+  name: string
+  permission_count: number
+  ignores_ssc: boolean
+  is_registration_group: boolean
+  is_guest_group: boolean
+}
+
+export interface TShockSecurityOverview {
+  ssc_enabled: boolean
+  ssc_source: string
+  default_registration_group?: string
+  default_guest_group?: string
+  database_exists: boolean
+  users: TShockUserAccount[]
+  groups: TShockGroupSummary[]
+}
+
 export const serverApi = {
   getList: () =>
     api.get<ServerStatus[]>('/servers'),
@@ -104,6 +129,9 @@ export const serverApi = {
     api.get<string[]>(`/servers/${id}/logs`, {
       params: { limit }
     }),
+
+  getTshockSecurity: (id: string) =>
+    api.get<TShockSecurityOverview>(`/servers/${id}/tshock-security`),
 
   getConfig: (id: string) =>
     api.get<ServerConfig>(`/servers/${id}/config`),

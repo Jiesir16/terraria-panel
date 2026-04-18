@@ -83,3 +83,31 @@ pub struct ServerDetail {
 pub struct CommandRequest {
     pub command: String,
 }
+
+#[derive(Debug, Serialize)]
+pub struct TShockUserAccount {
+    pub username: String,
+    pub group_name: Option<String>,
+    pub is_superadmin: bool,
+    pub ignores_ssc: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TShockGroupSummary {
+    pub name: String,
+    pub permission_count: usize,
+    pub ignores_ssc: bool,
+    pub is_registration_group: bool,
+    pub is_guest_group: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TShockSecurityOverview {
+    pub ssc_enabled: bool,
+    pub ssc_source: String,
+    pub default_registration_group: Option<String>,
+    pub default_guest_group: Option<String>,
+    pub database_exists: bool,
+    pub users: Vec<TShockUserAccount>,
+    pub groups: Vec<TShockGroupSummary>,
+}
