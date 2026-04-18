@@ -51,9 +51,17 @@ fn load_ssc_config(config_dir: &std::path::Path) -> Result<Option<SscConfig>, Ap
 
     let config_str = std::fs::read_to_string(&ssc_config_path)
         .map_err(|e| AppError::FileError(e.to_string()))?;
-    let value = serde_json::from_str::<SscConfig>(&config_str)
-        .map_err(|e| AppError::BadRequest(format!("Invalid sscconfig.json: {}", e)))?;
-    Ok(Some(value))
+    match serde_json::from_str::<SscConfig>(&config_str) {
+        Ok(value) => Ok(Some(value)),
+        Err(e) => {
+            tracing::warn!(
+                path = %ssc_config_path.display(),
+                error = %e,
+                "Failed to parse sscconfig.json, falling back to defaults"
+            );
+            Ok(Some(SscConfig::default()))
+        }
+    }
 }
 
 fn merge_ssc_settings(
