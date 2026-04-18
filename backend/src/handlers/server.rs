@@ -430,6 +430,16 @@ fn load_tshock_security_overview(
     let conn = Connection::open(&sqlite_path)
         .map_err(|e| AppError::DatabaseError(format!("Failed to open tshock.sqlite: {}", e)))?;
 
+    let table_names = {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .map_err(|e| AppError::DatabaseError(format!("Failed to inspect tshock.sqlite tables: {}", e)))?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| AppError::DatabaseError(format!("Failed to read sqlite_master rows: {}", e)))?;
+        rows.collect::<Result<BTreeSet<_>, _>>()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to collect sqlite table names: {}", e)))?
+    };
+
     let user_rows = {
         let mut stmt = conn
             .prepare("SELECT Username, Usergroup FROM Users ORDER BY Username")
@@ -445,7 +455,7 @@ fn load_tshock_security_overview(
             .map_err(|e| AppError::DatabaseError(format!("Failed to collect Users rows: {}", e)))?
     };
 
-    let permission_rows = {
+    let permission_rows = if table_names.contains("GroupPermissions") {
         let mut stmt = conn
             .prepare("SELECT GroupName, Permission FROM GroupPermissions ORDER BY GroupName, Permission")
             .map_err(|e| AppError::DatabaseError(format!("Failed to query GroupPermissions table: {}", e)))?;
@@ -458,6 +468,21 @@ fn load_tshock_security_overview(
         .map_err(|e| AppError::DatabaseError(format!("Failed to read GroupPermissions rows: {}", e)))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| AppError::DatabaseError(format!("Failed to collect GroupPermissions rows: {}", e)))?
+    } else if table_names.contains("Permissions") {
+        let mut stmt = conn
+            .prepare("SELECT GroupName, Permission FROM Permissions ORDER BY GroupName, Permission")
+            .map_err(|e| AppError::DatabaseError(format!("Failed to query Permissions table: {}", e)))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+            ))
+        })
+        .map_err(|e| AppError::DatabaseError(format!("Failed to read Permissions rows: {}", e)))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to collect Permissions rows: {}", e)))?
+    } else {
+        Vec::new()
     };
 
     let mut group_permissions: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -466,6 +491,20 @@ fn load_tshock_security_overview(
             .entry(group_name)
             .or_default()
             .insert(permission);
+    }
+
+    if table_names.contains("Groups") {
+        let mut stmt = conn
+            .prepare("SELECT GroupName FROM Groups ORDER BY GroupName")
+            .map_err(|e| AppError::DatabaseError(format!("Failed to query Groups table: {}", e)))?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| AppError::DatabaseError(format!("Failed to read Groups rows: {}", e)))?;
+        let group_names = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to collect Groups rows: {}", e)))?;
+        for group_name in group_names {
+            group_permissions.entry(group_name).or_default();
+        }
     }
 
     for (_, group_name) in &user_rows {

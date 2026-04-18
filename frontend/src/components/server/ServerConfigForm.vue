@@ -172,8 +172,15 @@
         </n-divider>
 
         <n-form-item label="服务端存档 (SSC)" path="server_side_character">
+          <div class="ssc-config-row">
+            <div>
+              <n-checkbox v-model:checked="formData.server_side_character">启用服务端存档</n-checkbox>
+            </div>
+            <n-button v-if="authStore.isOperator" size="small" secondary @click="showSscConfig = true">
+              SSC 详细配置
+            </n-button>
+          </div>
           <div>
-            <n-checkbox v-model:checked="formData.server_side_character">启用服务端存档</n-checkbox>
             <div class="field-hint">强制使用服务端角色数据，防止玩家作弊修改本地存档。开启后玩家首次进入需注册。</div>
           </div>
         </n-form-item>
@@ -245,6 +252,12 @@
         </div>
       </n-form>
     </n-spin>
+
+    <ssc-config-modal
+      v-model:show="showSscConfig"
+      :server-id="props.serverId"
+      @saved="handleSscConfigSaved"
+    />
   </div>
 </template>
 
@@ -255,6 +268,7 @@ import { useAuthStore } from '../../stores/auth'
 import { useServersStore } from '../../stores/servers'
 import { serverApi } from '../../api/server'
 import { useNotification } from '../../composables/useNotification'
+import SscConfigModal from './SscConfigModal.vue'
 
 interface Props {
   serverId: string
@@ -268,6 +282,7 @@ const notification = useNotification()
 const formRef = ref()
 const loading = ref(false)
 const saving = ref(false)
+const showSscConfig = ref(false)
 
 const formData = ref({
   // 基本设置
@@ -486,6 +501,10 @@ async function handleSave() {
   }
 }
 
+function handleSscConfigSaved(config: { Enabled: boolean }) {
+  formData.value.server_side_character = config.Enabled
+}
+
 onMounted(() => {
   loadConfig()
   loadWorldFiles()
@@ -519,6 +538,13 @@ onMounted(() => {
   color: var(--text-muted, #808080);
   margin-top: 4px;
   line-height: 1.4;
+}
+
+.ssc-config-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .form-actions {

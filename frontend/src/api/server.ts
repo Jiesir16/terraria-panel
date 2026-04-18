@@ -66,6 +66,21 @@ export interface ServerConfig {
   [key: string]: any
 }
 
+export interface SscInventoryItem {
+  netID: number
+  prefix: number
+  stack: number
+}
+
+export interface SscConfig {
+  Enabled: boolean
+  ServerSideCharacterSave: number
+  LogonDiscardThreshold: number
+  StartingHealth: number
+  StartingMana: number
+  StartingInventory: SscInventoryItem[]
+}
+
 export interface TShockUserAccount {
   username: string
   group_name?: string
@@ -138,6 +153,12 @@ export const serverApi = {
 
   updateConfig: (id: string, config: ServerConfig) =>
     api.put(`/servers/${id}/config`, config),
+
+  getSscConfig: (id: string) =>
+    api.get<SscConfig>(`/servers/${id}/ssc-config`),
+
+  updateSscConfig: (id: string, config: SscConfig) =>
+    api.put(`/servers/${id}/ssc-config`, config),
 
   importConfig: (id: string, config: ServerConfig) =>
     api.post(`/servers/${id}/config/import`, config),

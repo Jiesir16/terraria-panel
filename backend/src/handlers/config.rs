@@ -7,7 +7,7 @@ use serde_json::json;
 use crate::{
     auth::Auth,
     error::AppError,
-    models::ServerConfig,
+    models::{ServerConfig, SscConfig},
     handlers::AppState,
 };
 
@@ -41,6 +41,46 @@ fn load_tshock_config(config_dir: &std::path::Path) -> Result<Option<ServerConfi
         .map_err(|e| AppError::BadRequest(format!("Invalid config.json: {}", e)))?;
 
     Ok(ServerConfig::from_tshock_config_value(&value))
+}
+
+fn load_ssc_config(config_dir: &std::path::Path) -> Result<Option<SscConfig>, AppError> {
+    let ssc_config_path = config_dir.join("sscconfig.json");
+    if !ssc_config_path.exists() {
+        return Ok(None);
+    }
+
+    let config_str = std::fs::read_to_string(&ssc_config_path)
+        .map_err(|e| AppError::FileError(e.to_string()))?;
+    let value = serde_json::from_str::<SscConfig>(&config_str)
+        .map_err(|e| AppError::BadRequest(format!("Invalid sscconfig.json: {}", e)))?;
+    Ok(Some(value))
+}
+
+fn merge_ssc_settings(
+    mut config: ServerConfig,
+    ssc_config: Option<&SscConfig>,
+) -> ServerConfig {
+    if let Some(ssc_config) = ssc_config {
+        config.server_side_character = Some(ssc_config.enabled);
+    }
+
+    config
+}
+
+fn sync_ssc_config(config_dir: &std::path::Path, config: &ServerConfig) -> Result<(), AppError> {
+    let ssc_config_path = config_dir.join("sscconfig.json");
+    let mut ssc_config = load_ssc_config(config_dir)?.unwrap_or_default();
+
+    if let Some(enabled) = config.server_side_character {
+        ssc_config.enabled = enabled;
+    }
+
+    let ssc_json = serde_json::to_string_pretty(&ssc_config)
+        .map_err(|e| AppError::BadRequest(format!("Failed to serialize sscconfig.json: {}", e)))?;
+    std::fs::write(&ssc_config_path, ssc_json)
+        .map_err(|e| AppError::FileError(e.to_string()))?;
+
+    Ok(())
 }
 
 fn save_config_files(config_dir: &std::path::Path, config: &ServerConfig) -> Result<(), AppError> {
@@ -81,6 +121,8 @@ fn save_config_files(config_dir: &std::path::Path, config: &ServerConfig) -> Res
         .map_err(|e| AppError::BadRequest(format!("Failed to serialize: {}", e)))?;
     std::fs::write(&tshock_config_path, tshock_json)
         .map_err(|e| AppError::FileError(e.to_string()))?;
+
+    sync_ssc_config(config_dir, config)?;
 
     Ok(())
 }
@@ -132,12 +174,14 @@ pub async fn get_config(
         .join(&server_id)
         .join("tshock");
 
+    let ssc_config = load_ssc_config(&config_dir)?;
+
     if let Some(config) = load_panel_config(&config_dir)? {
-        return Ok(Json(config));
+        return Ok(Json(merge_ssc_settings(config, ssc_config.as_ref())));
     }
 
     if let Some(config) = load_tshock_config(&config_dir)? {
-        return Ok(Json(config));
+        return Ok(Json(merge_ssc_settings(config, ssc_config.as_ref())));
     }
 
     tracing::debug!(server_id = %server_id, "Config file not found, returning defaults");
@@ -232,10 +276,71 @@ pub async fn export_config(
         .join(&server_id)
         .join("tshock");
 
+    let ssc_config = load_ssc_config(&config_dir)?;
     let config = load_panel_config(&config_dir)?
         .or(load_tshock_config(&config_dir)?)
         .unwrap_or_default();
 
     tracing::info!(server_id = %server_id, "Config exported successfully");
-    Ok(Json(config))
+    Ok(Json(merge_ssc_settings(config, ssc_config.as_ref())))
+}
+
+pub async fn get_ssc_config(
+    State(state): State<AppState>,
+    _auth: Auth,
+    Path(server_id): Path<String>,
+) -> Result<Json<SscConfig>, AppError> {
+    let config_dir = state
+        .config
+        .server
+        .data_dir
+        .join("servers")
+        .join(&server_id)
+        .join("tshock");
+
+    Ok(Json(load_ssc_config(&config_dir)?.unwrap_or_default()))
+}
+
+pub async fn update_ssc_config(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(server_id): Path<String>,
+    Json(ssc_config): Json<SscConfig>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !auth.is_operator_or_admin() {
+        return Err(AppError::Forbidden(
+            "Only operators and admins can update SSC config".to_string(),
+        ));
+    }
+
+    let config_dir = state
+        .config
+        .server
+        .data_dir
+        .join("servers")
+        .join(&server_id)
+        .join("tshock");
+
+    std::fs::create_dir_all(&config_dir)
+        .map_err(|e| AppError::FileError(e.to_string()))?;
+
+    let ssc_config_path = config_dir.join("sscconfig.json");
+    let ssc_json = serde_json::to_string_pretty(&ssc_config)
+        .map_err(|e| AppError::BadRequest(format!("Invalid SSC config: {}", e)))?;
+    std::fs::write(&ssc_config_path, ssc_json)
+        .map_err(|e| AppError::FileError(e.to_string()))?;
+
+    let mut merged_config = load_panel_config(&config_dir)?
+        .or(load_tshock_config(&config_dir)?)
+        .unwrap_or_default();
+    merged_config.server_side_character = Some(ssc_config.enabled);
+    save_config_files(&config_dir, &merged_config)?;
+    sync_server_row_from_config(&state, &server_id, &merged_config)?;
+
+    crate::db::log_operation(&state.db, &auth.user_id, "更新SSC配置", Some(&server_id), None);
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "SSC config updated successfully"
+    })))
 }

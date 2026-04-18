@@ -136,6 +136,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/servers/:id/config",
             get(handlers::config::get_config).put(handlers::config::update_config),
         )
+        .route(
+            "/api/servers/:id/ssc-config",
+            get(handlers::config::get_ssc_config).put(handlers::config::update_ssc_config),
+        )
         .route("/api/config/templates", get(handlers::config::list_templates))
         .route(
             "/api/servers/:id/config/import",
