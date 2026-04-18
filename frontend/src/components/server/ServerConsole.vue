@@ -75,7 +75,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, nextTick, watch, onUnmounted } from 'vue'
+import { computed, ref, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { NInput, NButton, NSpace, NSelect } from 'naive-ui'
 import { useWebSocket } from '../../composables/useWebSocket'
 import { useNotification } from '../../composables/useNotification'
@@ -111,6 +111,10 @@ const currentServer = computed(() => {
   }
   return serversStore.getServerById(props.serverId) || null
 })
+const isRealtimeAvailable = computed(() => {
+  const status = currentServer.value?.status
+  return status === 'starting' || status === 'running'
+})
 const isServerOwner = computed(() => currentServer.value?.created_by === authStore.user?.id)
 const visibleCommandSections = computed(() => {
   const canUseScope = (scope: CommandScope) => {
@@ -129,10 +133,11 @@ const visibleCommandSections = computed(() => {
   return SERVER_COMMAND_SECTIONS.filter(section => canUseScope(section.scope))
 })
 
-const { sendCommand: wsSendCommand, connected, messages, reconnect, clearMessages } = useWebSocket(
+const { sendCommand: wsSendCommand, connected, messages, reconnect, disconnect, clearMessages } = useWebSocket(
   props.serverId,
   {
     historyLines: historyLines.value,
+    autoConnect: false,
     onMessage: () => {
       nextTick(() => {
         scrollToBottom()
@@ -145,8 +150,13 @@ const { sendCommand: wsSendCommand, connected, messages, reconnect, clearMessage
 )
 
 function handleReconnect() {
-  reconnect()
-  notification.success('正在重新连接...', '')
+  if (isRealtimeAvailable.value) {
+    reconnect()
+    notification.success('正在重新连接...', '')
+    return
+  }
+  handleReloadHistory()
+  notification.success('服务器未运行，已刷新历史日志', '')
 }
 
 async function handleReloadHistory() {
@@ -156,7 +166,7 @@ async function handleReloadHistory() {
     nextTick(() => {
       scrollToBottom()
     })
-    if (!connected.value) {
+    if (isRealtimeAvailable.value && !connected.value) {
       reconnect()
     }
   } catch (error: any) {
@@ -235,9 +245,21 @@ onUnmounted(() => {
   // Cleanup is handled by useWebSocket
 })
 
+onMounted(() => {
+  handleReloadHistory()
+})
+
 watch(historyLines, () => {
   handleReloadHistory()
 })
+
+watch(isRealtimeAvailable, (active) => {
+  if (active) {
+    reconnect()
+  } else {
+    disconnect()
+  }
+}, { immediate: true })
 </script>
 
 <style scoped>

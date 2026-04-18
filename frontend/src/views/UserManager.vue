@@ -23,7 +23,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, h } from 'vue'
-import { NButton, NSpin, NDataTable, NSpace } from 'naive-ui'
+import { NButton, NSpin, NDataTable, NSpace, NSelect } from 'naive-ui'
 import { systemApi } from '../api/system'
 import { useNotification } from '../composables/useNotification'
 import CreateUserModal from '../components/user/CreateUserModal.vue'
@@ -33,6 +33,11 @@ const notification = useNotification()
 const showCreateModal = ref(false)
 const loading = ref(false)
 const users = ref<any[]>([])
+const roleOptions = [
+  { label: '管理员', value: 'admin' },
+  { label: '操作员', value: 'operator' },
+  { label: '观察者', value: 'viewer' }
+]
 
 const columns = computed(() => [
   {
@@ -43,15 +48,14 @@ const columns = computed(() => [
   {
     title: '角色',
     key: 'role',
-    width: 100,
-    render: (row: any) => {
-      const roleMap: Record<string, string> = {
-        'admin': '管理员',
-        'operator': '操作员',
-        'viewer': '观察者'
-      }
-      return roleMap[row.role] || row.role
-    }
+    width: 160,
+    render: (row: any) => h(NSelect, {
+      value: row.role,
+      size: 'small',
+      style: 'width: 140px',
+      options: roleOptions,
+      onUpdateValue: (value: string) => handleUpdateRole(row, value)
+    })
   },
   {
     title: '创建时间',
@@ -103,6 +107,21 @@ async function handleDeleteUser(userId: string) {
     loadUsers()
   } catch (error: any) {
     notification.error('删除失败', error?.response?.data?.message || '')
+  }
+}
+
+async function handleUpdateRole(user: any, role: string) {
+  if (user.role === role) {
+    return
+  }
+
+  try {
+    await systemApi.updateUser(user.id, { role: role as 'admin' | 'operator' | 'viewer' })
+    notification.success('角色已更新', `${user.username} 已设为 ${role}`)
+    await loadUsers()
+  } catch (error: any) {
+    notification.error('更新角色失败', error?.response?.data?.error || '')
+    await loadUsers()
   }
 }
 

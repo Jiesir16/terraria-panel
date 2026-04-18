@@ -36,6 +36,7 @@
             v-for="server in serversStore.servers"
             :key="server.id"
             :server="server"
+            :can-control="authStore.isOperator"
             @start="() => handleStartServer(server.id)"
             @stop="() => handleStopServer(server.id)"
             @click="() => goToServerDetail(server.id)"
@@ -63,6 +64,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { NSpin, NDataTable, NButton, useDialog } from 'naive-ui'
 import { useServersStore } from '../stores/servers'
+import { useAuthStore } from '../stores/auth'
 import { systemApi } from '../api/system'
 import { useNotification } from '../composables/useNotification'
 import StatCard from '../components/common/StatCard.vue'
@@ -70,6 +72,7 @@ import ServerCard from '../components/server/ServerCard.vue'
 
 const router = useRouter()
 const serversStore = useServersStore()
+const authStore = useAuthStore()
 const notification = useNotification()
 const dialog = useDialog()
 

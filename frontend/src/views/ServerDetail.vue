@@ -9,11 +9,11 @@
         <n-button @click="handleRefresh">
           刷新状态
         </n-button>
-        <n-button type="warning" :loading="killLoading" @click="handleKill">
+        <n-button v-if="authStore.isOperator" type="warning" :loading="killLoading" @click="handleKill">
           强制结束
         </n-button>
         <n-button
-          v-if="isCurrentServerActive"
+          v-if="authStore.isOperator && isCurrentServerActive"
           type="error"
           :loading="stopLoading"
           @click="handleStop"
@@ -21,14 +21,14 @@
           停止服务器
         </n-button>
         <n-button
-          v-else
+          v-else-if="authStore.isOperator"
           type="success"
           :loading="startLoading"
           @click="handleStart"
         >
           启动服务器
         </n-button>
-        <n-button @click="handleRestart" type="warning" :loading="restartLoading">
+        <n-button v-if="authStore.isOperator" @click="handleRestart" type="warning" :loading="restartLoading">
           重启服务器
         </n-button>
       </div>
@@ -48,7 +48,7 @@
           <div class="mods-section">
             <div class="section-header">
               <h3>已安装 Mod</h3>
-              <n-button text type="primary" @click="showModUpload = true">
+              <n-button v-if="authStore.isOperator" text type="primary" @click="showModUpload = true">
                 + 上传 Mod
               </n-button>
             </div>
@@ -58,6 +58,7 @@
                   v-for="mod in mods"
                   :key="mod.name"
                   :mod="mod"
+                  :can-manage="authStore.isOperator"
                   @toggle="() => handleToggleMod(mod.name)"
                   @delete="() => handleDeleteMod(mod.name)"
                 />
@@ -75,7 +76,7 @@
           <div class="saves-section">
             <div class="section-header">
               <h3>世界存档</h3>
-              <n-button text type="primary" @click="handleBackup">
+              <n-button v-if="authStore.isOperator" text type="primary" @click="handleBackup">
                 + 手动备份
               </n-button>
             </div>
@@ -86,6 +87,7 @@
                   :key="save.id"
                   :save="save"
                   :server-id="serverId"
+                  :can-manage="authStore.isOperator"
                   @import="() => handleImportSave(save.id)"
                   @delete="() => handleDeleteSave(save.id)"
                   @download="() => handleDownloadSave(save)"
@@ -103,6 +105,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { NSpin, NTabs, NTabPane, NButton, useDialog } from 'naive-ui'
+import { useAuthStore } from '../stores/auth'
 import { useServersStore } from '../stores/servers'
 import { modsApi } from '../api/mods'
 import { savesApi } from '../api/saves'
@@ -115,6 +118,7 @@ import ModUploadModal from '../components/mod/ModUploadModal.vue'
 import SaveCard from '../components/save/SaveCard.vue'
 
 const route = useRoute()
+const authStore = useAuthStore()
 const serversStore = useServersStore()
 const notification = useNotification()
 const dialog = useDialog()

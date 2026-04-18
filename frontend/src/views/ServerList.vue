@@ -6,7 +6,7 @@
         <n-button @click="loadServers">
           刷新状态
         </n-button>
-        <n-button type="primary" @click="showCreateModal = true">
+        <n-button v-if="authStore.isOperator" type="primary" @click="showCreateModal = true">
           + 新建服务器
         </n-button>
       </div>
@@ -30,12 +30,14 @@
 import { ref, computed, onMounted, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { NButton, NSpin, NDataTable, NSpace, useDialog } from 'naive-ui'
+import { useAuthStore } from '../stores/auth'
 import { useServersStore } from '../stores/servers'
 import { useNotification } from '../composables/useNotification'
 import CreateServerModal from '../components/server/CreateServerModal.vue'
 import ServerStatusBadge from '../components/server/ServerStatusBadge.vue'
 
 const router = useRouter()
+const authStore = useAuthStore()
 const serversStore = useServersStore()
 const notification = useNotification()
 const dialog = useDialog()
@@ -89,16 +91,18 @@ const columns = computed(() => [
       { size: 'small' },
       {
         default: () => [
-          h(
-            NButton,
-            {
-              text: true,
-              type: isServerActive(row.status) ? 'error' : 'primary',
-              size: 'small',
-              onClick: () => isServerActive(row.status) ? handleStop(row.id) : handleStart(row.id)
-            },
-            { default: () => isServerActive(row.status) ? '停止' : '启动' }
-          ),
+          ...(authStore.isOperator ? [
+            h(
+              NButton,
+              {
+                text: true,
+                type: isServerActive(row.status) ? 'error' : 'primary',
+                size: 'small',
+                onClick: () => isServerActive(row.status) ? handleStop(row.id) : handleStart(row.id)
+              },
+              { default: () => isServerActive(row.status) ? '停止' : '启动' }
+            )
+          ] : []),
           h(
             NButton,
             {
@@ -109,26 +113,30 @@ const columns = computed(() => [
             },
             { default: () => '详情' }
           ),
-          h(
-            NButton,
-            {
-              text: true,
-              type: 'warning',
-              size: 'small',
-              onClick: () => handleKill(row.id)
-            },
-            { default: () => '强制结束' }
-          ),
-          h(
-            NButton,
-            {
-              text: true,
-              type: 'error',
-              size: 'small',
-              onClick: () => handleDelete(row.id)
-            },
-            { default: () => '删除' }
-          )
+          ...(authStore.isOperator ? [
+            h(
+              NButton,
+              {
+                text: true,
+                type: 'warning',
+                size: 'small',
+                onClick: () => handleKill(row.id)
+              },
+              { default: () => '强制结束' }
+            )
+          ] : []),
+          ...(authStore.isAdmin ? [
+            h(
+              NButton,
+              {
+                text: true,
+                type: 'error',
+                size: 'small',
+                onClick: () => handleDelete(row.id)
+              },
+              { default: () => '删除' }
+            )
+          ] : [])
         ]
       }
     )

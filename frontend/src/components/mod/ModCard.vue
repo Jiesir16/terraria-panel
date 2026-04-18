@@ -18,7 +18,7 @@
       </div>
     </div>
 
-    <div class="mod-actions">
+    <div v-if="canManage" class="mod-actions">
       <n-button
         text
         :type="mod.enabled ? 'error' : 'success'"
@@ -49,6 +49,7 @@ interface Props {
     enabled: boolean
     uploaded_at: string
   }
+  canManage?: boolean
 }
 
 interface Emits {
@@ -56,7 +57,9 @@ interface Emits {
   (e: 'delete'): void
 }
 
-defineProps<Props>()
+withDefaults(defineProps<Props>(), {
+  canManage: true
+})
 defineEmits<Emits>()
 
 function formatSize(bytes: number): string {

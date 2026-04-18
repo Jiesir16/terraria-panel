@@ -24,7 +24,7 @@
       </div>
     </div>
 
-    <div class="card-actions">
+    <div v-if="canControl" class="card-actions">
       <n-button
         v-if="server.status !== 'stopped'"
         text
@@ -53,6 +53,7 @@ import ServerStatusBadge from './ServerStatusBadge.vue'
 
 interface Props {
   server: any
+  canControl?: boolean
 }
 
 interface Emits {
@@ -61,7 +62,9 @@ interface Emits {
   (e: 'stop'): void
 }
 
-defineProps<Props>()
+withDefaults(defineProps<Props>(), {
+  canControl: true
+})
 defineEmits<Emits>()
 </script>
 

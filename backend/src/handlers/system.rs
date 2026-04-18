@@ -34,6 +34,13 @@ pub struct UpdateUserRequest {
     pub role: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub password: String,
+    pub role: String,
+}
+
 pub async fn system_info(
     State(state): State<AppState>,
     _auth: Auth,
@@ -126,7 +133,7 @@ pub async fn list_users(
 pub async fn create_user(
     State(state): State<AppState>,
     auth: Auth,
-    Json(req): Json<crate::models::RegisterRequest>,
+    Json(req): Json<CreateUserRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     tracing::info!(admin = %auth.username, new_user = %req.username, "Admin creating new user");
 
@@ -140,6 +147,12 @@ pub async fn create_user(
     if req.username.is_empty() || req.password.is_empty() {
         return Err(AppError::BadRequest(
             "Username and password cannot be empty".to_string(),
+        ));
+    }
+
+    if !matches!(req.role.as_str(), "admin" | "operator" | "viewer") {
+        return Err(AppError::BadRequest(
+            "Invalid role. Expected one of: admin, operator, viewer".to_string(),
         ));
     }
 
@@ -170,13 +183,13 @@ pub async fn create_user(
     db.execute(
         "INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![user_id, req.username, password_hash, "viewer", now, now],
+        params![user_id, req.username, password_hash, req.role, now, now],
     )
     .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
     tracing::info!(admin = %auth.username, new_user = %req.username, user_id = %user_id, "User created successfully");
     drop(db);
-    crate::db::log_operation(&state.db, &auth.user_id, "创建用户", Some(&req.username), Some("role=viewer"));
+    crate::db::log_operation(&state.db, &auth.user_id, "创建用户", Some(&req.username), Some(&format!("role={}", req.role)));
 
     Ok(Json(json!({
         "success": true,

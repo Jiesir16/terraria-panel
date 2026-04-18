@@ -236,7 +236,7 @@
         </n-form-item>
 
         <div class="form-actions">
-          <n-button type="primary" :loading="saving" @click="handleSave">
+          <n-button v-if="authStore.isOperator" type="primary" :loading="saving" @click="handleSave">
             保存配置
           </n-button>
           <n-button @click="loadConfig" :disabled="loading">
@@ -251,6 +251,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
 import { NSpin, NForm, NFormItem, NInput, NInputNumber, NSelect, NCheckbox, NButton, NDivider, NGrid, NGridItem, NSpace } from 'naive-ui'
+import { useAuthStore } from '../../stores/auth'
 import { useServersStore } from '../../stores/servers'
 import { serverApi } from '../../api/server'
 import { useNotification } from '../../composables/useNotification'
@@ -260,6 +261,7 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+const authStore = useAuthStore()
 const serversStore = useServersStore()
 const notification = useNotification()
 

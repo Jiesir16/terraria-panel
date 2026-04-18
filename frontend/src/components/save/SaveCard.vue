@@ -21,7 +21,7 @@
 
     <div class="save-actions">
       <n-button
-        v-if="serverId"
+        v-if="serverId && canManage"
         text
         type="primary"
         size="small"
@@ -38,6 +38,7 @@
         下载
       </n-button>
       <n-button
+        v-if="canManage"
         text
         type="error"
         size="small"
@@ -61,6 +62,7 @@ interface Props {
     source_server_id?: string
   }
   serverId: string
+  canManage?: boolean
 }
 
 interface Emits {
@@ -69,7 +71,9 @@ interface Emits {
   (e: 'delete'): void
 }
 
-defineProps<Props>()
+withDefaults(defineProps<Props>(), {
+  canManage: true
+})
 defineEmits<Emits>()
 
 function formatSize(bytes: number): string {
