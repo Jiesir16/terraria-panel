@@ -4,16 +4,12 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::json;
 use chrono::Utc;
 use rusqlite::params;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
-use crate::{
-    auth::Auth,
-    error::AppError,
-    handlers::AppState,
-};
+use crate::{auth::Auth, error::AppError, handlers::AppState};
 
 fn is_allowed_save_name(name: &str) -> bool {
     name.ends_with(".wld") || name.ends_with(".wld.bak") || name.ends_with(".bak")
@@ -258,8 +254,7 @@ pub async fn download_save(
 
     tracing::debug!(save_id = %save_id, file_path = %file_path, "Reading save file from disk");
 
-    let file = std::fs::read(&file_path)
-        .map_err(|e| AppError::FileError(e.to_string()))?;
+    let file = std::fs::read(&file_path).map_err(|e| AppError::FileError(e.to_string()))?;
 
     tracing::info!(save_id = %save_id, size = file.len(), "Save file downloaded");
 
@@ -273,11 +268,7 @@ pub async fn download_save(
         .map_err(|e| AppError::InternalServerError(e.to_string()))?;
     headers.insert(header::CONTENT_DISPOSITION, content_disposition);
 
-    Ok((
-        StatusCode::OK,
-        headers,
-        file,
-    ))
+    Ok((StatusCode::OK, headers, file))
 }
 
 pub async fn delete_save(
@@ -313,12 +304,17 @@ pub async fn delete_save(
     // Delete file
     if std::path::Path::new(&file_path).exists() {
         tracing::debug!(save_id = %save_id, file_path = %file_path, "Removing save file from disk");
-        std::fs::remove_file(&file_path)
-            .map_err(|e| AppError::FileError(e.to_string()))?;
+        std::fs::remove_file(&file_path).map_err(|e| AppError::FileError(e.to_string()))?;
     }
 
     tracing::info!(save_id = %save_id, "Save deleted successfully");
-    crate::db::log_operation(&state.db, &auth.user_id, "删除存档", Some(&save_id), Some(&file_path));
+    crate::db::log_operation(
+        &state.db,
+        &auth.user_id,
+        "删除存档",
+        Some(&save_id),
+        Some(&file_path),
+    );
 
     Ok(Json(json!({
         "success": true,

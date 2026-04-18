@@ -109,8 +109,9 @@ impl VersionManager {
             return Ok(versions);
         }
 
-        let entries = std::fs::read_dir(&self.versions_dir)
-            .map_err(|e| AppError::FileError(format!("Failed to read versions directory: {}", e)))?;
+        let entries = std::fs::read_dir(&self.versions_dir).map_err(|e| {
+            AppError::FileError(format!("Failed to read versions directory: {}", e))
+        })?;
 
         for entry in entries {
             let entry = entry.map_err(|e| AppError::FileError(e.to_string()))?;
@@ -149,7 +150,11 @@ impl VersionManager {
         Ok(versions)
     }
 
-    pub async fn fetch_available(&self, page: usize, per_page: usize) -> Result<AvailableVersionsResponse, AppError> {
+    pub async fn fetch_available(
+        &self,
+        page: usize,
+        per_page: usize,
+    ) -> Result<AvailableVersionsResponse, AppError> {
         let github_mirror = self.github_mirror.read().await.clone();
 
         let api_per_page = 100;
@@ -185,13 +190,10 @@ impl VersionManager {
             )));
         }
 
-        let releases: Vec<GitHubRelease> = response
-            .json()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to parse GitHub API response JSON");
-                AppError::ProcessError(format!("Failed to parse releases: {}", e))
-            })?;
+        let releases: Vec<GitHubRelease> = response.json().await.map_err(|e| {
+            tracing::error!(error = %e, "Failed to parse GitHub API response JSON");
+            AppError::ProcessError(format!("Failed to parse releases: {}", e))
+        })?;
 
         tracing::info!(releases_count = releases.len(), "Parsed GitHub releases");
 
@@ -200,7 +202,7 @@ impl VersionManager {
             local_versions.iter().map(|v| v.version.clone()).collect();
 
         // Detect current platform to prefer matching assets
-        let arch = std::env::consts::ARCH;   // "x86_64", "aarch64", …
+        let arch = std::env::consts::ARCH; // "x86_64", "aarch64", …
         let is_arm = arch.contains("arm") || arch.contains("aarch64");
 
         let mut all_versions = Vec::new();
@@ -215,10 +217,9 @@ impl VersionManager {
                     download_url = Self::apply_mirror(&download_url, &github_mirror);
                 }
 
-                let display_name = release
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("TShock {}", release.tag_name.trim_start_matches('v')));
+                let display_name = release.name.clone().unwrap_or_else(|| {
+                    format!("TShock {}", release.tag_name.trim_start_matches('v'))
+                });
 
                 all_versions.push(VersionInfo {
                     version: release.tag_name.clone(),
@@ -256,7 +257,10 @@ impl VersionManager {
     fn pick_best_asset<'a>(assets: &'a [GitHubAsset], is_arm: bool) -> Option<&'a GitHubAsset> {
         let is_archive = |name: &str| {
             let l = name.to_lowercase();
-            l.ends_with(".zip") || l.ends_with(".tar") || l.ends_with(".tar.gz") || l.ends_with(".tgz")
+            l.ends_with(".zip")
+                || l.ends_with(".tar")
+                || l.ends_with(".tar.gz")
+                || l.ends_with(".tgz")
         };
         let is_linux = |name: &str| {
             let l = name.to_lowercase();
@@ -304,7 +308,10 @@ impl VersionManager {
             return url.to_string();
         }
 
-        if mirror.contains("ghproxy") || mirror.contains("gh-proxy") || mirror.contains("mirror.ghproxy") {
+        if mirror.contains("ghproxy")
+            || mirror.contains("gh-proxy")
+            || mirror.contains("mirror.ghproxy")
+        {
             format!("{}/{}", mirror, url)
         } else {
             url.replace("https://github.com", mirror)
@@ -342,8 +349,9 @@ impl VersionManager {
 
         tracing::info!(version = %tag_name, url = %actual_url, "Starting version download");
 
-        std::fs::create_dir_all(&version_dir)
-            .map_err(|e| AppError::FileError(format!("Failed to create version directory: {}", e)))?;
+        std::fs::create_dir_all(&version_dir).map_err(|e| {
+            AppError::FileError(format!("Failed to create version directory: {}", e))
+        })?;
 
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(300))
@@ -402,15 +410,19 @@ impl VersionManager {
     /// This handles the case where a previous download saved the archive but
     /// extraction failed (e.g. tar file treated as zip).
     fn try_extract_existing_archives(&self, version_dir: &Path) -> Result<(), AppError> {
-        let entries = std::fs::read_dir(version_dir)
-            .map_err(|e| AppError::FileError(e.to_string()))?;
+        let entries =
+            std::fs::read_dir(version_dir).map_err(|e| AppError::FileError(e.to_string()))?;
 
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_file() {
                 continue;
             }
-            let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let fname = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             if let Some(format) = ArchiveFormat::from_filename(&fname) {
                 tracing::info!(file = %fname, format = ?format, "Found unextracted archive, extracting now");
                 match Self::extract_archive(&path, version_dir, format) {
@@ -429,7 +441,11 @@ impl VersionManager {
 
     /// Extract an archive (zip, tar, or tar.gz) into `extract_to`, flattening
     /// a common top-level prefix directory if one exists.
-    fn extract_archive(archive_path: &Path, extract_to: &Path, format: ArchiveFormat) -> Result<(), AppError> {
+    fn extract_archive(
+        archive_path: &Path,
+        extract_to: &Path,
+        format: ArchiveFormat,
+    ) -> Result<(), AppError> {
         match format {
             ArchiveFormat::Zip => Self::extract_zip(archive_path, extract_to),
             ArchiveFormat::Tar => Self::extract_tar(archive_path, extract_to, false),
@@ -465,12 +481,14 @@ impl VersionManager {
             let output_path = extract_to.join(relative);
 
             if file.is_dir() {
-                std::fs::create_dir_all(&output_path)
-                    .map_err(|e| AppError::FileError(format!("Failed to create directory: {}", e)))?;
+                std::fs::create_dir_all(&output_path).map_err(|e| {
+                    AppError::FileError(format!("Failed to create directory: {}", e))
+                })?;
             } else {
                 if let Some(parent) = output_path.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| AppError::FileError(format!("Failed to create parent dir: {}", e)))?;
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        AppError::FileError(format!("Failed to create parent dir: {}", e))
+                    })?;
                 }
                 let mut output_file = std::fs::File::create(&output_path)
                     .map_err(|e| AppError::FileError(format!("Failed to create file: {}", e)))?;
@@ -543,12 +561,14 @@ impl VersionManager {
             let output_path = extract_to.join(&relative);
 
             if entry.header().entry_type().is_dir() {
-                std::fs::create_dir_all(&output_path)
-                    .map_err(|e| AppError::FileError(format!("Failed to create directory: {}", e)))?;
+                std::fs::create_dir_all(&output_path).map_err(|e| {
+                    AppError::FileError(format!("Failed to create directory: {}", e))
+                })?;
             } else if entry.header().entry_type().is_file() {
                 if let Some(parent) = output_path.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| AppError::FileError(format!("Failed to create parent dir: {}", e)))?;
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        AppError::FileError(format!("Failed to create parent dir: {}", e))
+                    })?;
                 }
                 let mut output_file = std::fs::File::create(&output_path)
                     .map_err(|e| AppError::FileError(format!("Failed to create file: {}", e)))?;
@@ -563,9 +583,9 @@ impl VersionManager {
     /// Detect a common prefix directory in a tar archive.
     fn detect_tar_prefix(reader: Box<dyn std::io::Read>) -> Result<Option<String>, AppError> {
         let mut archive = tar::Archive::new(reader);
-        let entries = archive
-            .entries()
-            .map_err(|e| AppError::FileError(format!("Failed to read tar for prefix detection: {}", e)))?;
+        let entries = archive.entries().map_err(|e| {
+            AppError::FileError(format!("Failed to read tar for prefix detection: {}", e))
+        })?;
 
         let mut common: Option<String> = None;
         for entry_result in entries {
@@ -706,16 +726,17 @@ impl VersionManager {
             return Ok(0);
         }
 
-        let entries = std::fs::read_dir(path)
-            .map_err(|e| AppError::FileError(e.to_string()))?;
+        let entries = std::fs::read_dir(path).map_err(|e| AppError::FileError(e.to_string()))?;
 
         for entry in entries {
             let entry = entry.map_err(|e| AppError::FileError(e.to_string()))?;
-            let file_type = entry.file_type()
+            let file_type = entry
+                .file_type()
                 .map_err(|e| AppError::FileError(e.to_string()))?;
 
             if file_type.is_file() {
-                let metadata = entry.metadata()
+                let metadata = entry
+                    .metadata()
                     .map_err(|e| AppError::FileError(e.to_string()))?;
                 total_size += metadata.len();
             } else if file_type.is_dir() {

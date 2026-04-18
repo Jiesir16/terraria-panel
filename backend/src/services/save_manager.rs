@@ -66,8 +66,9 @@ impl SaveManager {
         }
 
         if !self.saves_dir.exists() {
-            std::fs::create_dir_all(&self.saves_dir)
-                .map_err(|e| AppError::FileError(format!("Failed to create saves directory: {}", e)))?;
+            std::fs::create_dir_all(&self.saves_dir).map_err(|e| {
+                AppError::FileError(format!("Failed to create saves directory: {}", e))
+            })?;
         }
 
         let save_id = Uuid::new_v4().to_string();
@@ -101,7 +102,10 @@ impl SaveManager {
         let save_file_path = PathBuf::from(save_path);
 
         if !save_file_path.exists() {
-            return Err(AppError::NotFound(format!("Save file not found: {}", save_path)));
+            return Err(AppError::NotFound(format!(
+                "Save file not found: {}",
+                save_path
+            )));
         }
 
         if !is_allowed_save_name(target_name) {
@@ -110,14 +114,12 @@ impl SaveManager {
             ));
         }
 
-        let world_dir = self
-            .servers_dir
-            .join(server_id)
-            .join("world");
+        let world_dir = self.servers_dir.join(server_id).join("world");
 
         if !world_dir.exists() {
-            std::fs::create_dir_all(&world_dir)
-                .map_err(|e| AppError::FileError(format!("Failed to create world directory: {}", e)))?;
+            std::fs::create_dir_all(&world_dir).map_err(|e| {
+                AppError::FileError(format!("Failed to create world directory: {}", e))
+            })?;
         }
 
         let normalized_name = normalize_world_filename(target_name);
@@ -128,11 +130,7 @@ impl SaveManager {
         Ok(normalized_name)
     }
 
-    pub fn backup_server(
-        &self,
-        server_id: &str,
-        world_name: &str,
-    ) -> Result<SaveInfo, AppError> {
+    pub fn backup_server(&self, server_id: &str, world_name: &str) -> Result<SaveInfo, AppError> {
         let world_dir = self.servers_dir.join(server_id).join("world");
         let world_file_path = if world_name.ends_with(".wld") || world_name.ends_with(".bak") {
             world_dir.join(world_name)
@@ -148,12 +146,17 @@ impl SaveManager {
         }
 
         if !self.saves_dir.exists() {
-            std::fs::create_dir_all(&self.saves_dir)
-                .map_err(|e| AppError::FileError(format!("Failed to create saves directory: {}", e)))?;
+            std::fs::create_dir_all(&self.saves_dir).map_err(|e| {
+                AppError::FileError(format!("Failed to create saves directory: {}", e))
+            })?;
         }
 
         let save_id = Uuid::new_v4().to_string();
-        let backup_name = format!("{}_backup_{}.wld", world_name, Local::now().format("%Y%m%d_%H%M%S"));
+        let backup_name = format!(
+            "{}_backup_{}.wld",
+            world_name,
+            Local::now().format("%Y%m%d_%H%M%S")
+        );
         let backup_path = self.saves_dir.join(&backup_name);
 
         std::fs::copy(&world_file_path, &backup_path)
@@ -186,8 +189,9 @@ impl SaveManager {
             .map_err(|e| AppError::FileError(format!("Failed to read saves directory: {}", e)))?;
 
         for entry in entries {
-            let entry = entry
-                .map_err(|e| AppError::FileError(format!("Failed to read directory entry: {}", e)))?;
+            let entry = entry.map_err(|e| {
+                AppError::FileError(format!("Failed to read directory entry: {}", e))
+            })?;
             let path = entry.path();
 
             if path.is_file() {
@@ -200,32 +204,28 @@ impl SaveManager {
                     continue;
                 }
 
-                let metadata = std::fs::metadata(&path)
-                    .map_err(|e| AppError::FileError(format!("Failed to get file metadata: {}", e)))?;
+                let metadata = std::fs::metadata(&path).map_err(|e| {
+                    AppError::FileError(format!("Failed to get file metadata: {}", e))
+                })?;
 
                 let created_at = metadata
                     .modified()
                     .ok()
                     .and_then(|t| {
                         let duration = t.duration_since(std::time::SystemTime::UNIX_EPOCH).ok()?;
-                        chrono::DateTime::<Local>::from(std::time::SystemTime::UNIX_EPOCH + duration)
-                            .format("%Y-%m-%d %H:%M:%S")
-                            .to_string()
-                            .into()
+                        chrono::DateTime::<Local>::from(
+                            std::time::SystemTime::UNIX_EPOCH + duration,
+                        )
+                        .format("%Y-%m-%d %H:%M:%S")
+                        .to_string()
+                        .into()
                     })
                     .unwrap_or_else(|| "unknown".to_string());
 
-                let save_id = filename
-                    .split('_')
-                    .next()
-                    .unwrap_or(&filename)
-                    .to_string();
+                let save_id = filename.split('_').next().unwrap_or(&filename).to_string();
 
                 let source_server_id = if filename.contains("_backup_") {
-                    filename
-                        .split('_')
-                        .nth(1)
-                        .map(|s| s.to_string())
+                    filename.split('_').nth(1).map(|s| s.to_string())
                 } else {
                     None
                 };
@@ -249,7 +249,10 @@ impl SaveManager {
         let path = PathBuf::from(file_path);
 
         if !path.exists() {
-            return Err(AppError::NotFound(format!("Save file not found: {}", file_path)));
+            return Err(AppError::NotFound(format!(
+                "Save file not found: {}",
+                file_path
+            )));
         }
 
         std::fs::remove_file(&path)

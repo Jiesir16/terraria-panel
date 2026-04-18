@@ -2,19 +2,14 @@ use axum::{
     extract::{Query, State},
     Json,
 };
+use chrono::Utc;
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use rusqlite::params;
-use chrono::Utc;
-use uuid::Uuid;
 use std::collections::HashMap;
+use uuid::Uuid;
 
-use crate::{
-    auth::Auth,
-    error::AppError,
-    models::UserInfo,
-    handlers::AppState,
-};
+use crate::{auth::Auth, error::AppError, handlers::AppState, models::UserInfo};
 
 #[derive(Debug, Serialize)]
 pub struct OperationLog {
@@ -171,9 +166,7 @@ pub async fn create_user(
 
     if exists {
         tracing::warn!(new_user = %req.username, "User creation failed: username already exists");
-        return Err(AppError::Conflict(
-            "Username already exists".to_string(),
-        ));
+        return Err(AppError::Conflict("Username already exists".to_string()));
     }
 
     let user_id = Uuid::new_v4().to_string();
@@ -189,7 +182,13 @@ pub async fn create_user(
 
     tracing::info!(admin = %auth.username, new_user = %req.username, user_id = %user_id, "User created successfully");
     drop(db);
-    crate::db::log_operation(&state.db, &auth.user_id, "创建用户", Some(&req.username), Some(&format!("role={}", req.role)));
+    crate::db::log_operation(
+        &state.db,
+        &auth.user_id,
+        "创建用户",
+        Some(&req.username),
+        Some(&format!("role={}", req.role)),
+    );
 
     Ok(Json(json!({
         "success": true,

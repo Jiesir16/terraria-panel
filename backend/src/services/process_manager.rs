@@ -1,8 +1,8 @@
 use crate::error::AppError;
 use crate::models::ServerStatus;
 use serde_json::Value;
-use std::collections::VecDeque;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -188,12 +188,10 @@ impl ProcessManager {
             }
         }
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| {
-                tracing::error!(server_id = %server_id, error = %e, "Failed to spawn TShock process");
-                AppError::ProcessError(format!("Failed to start server: {}", e))
-            })?;
+        let mut child = cmd.spawn().map_err(|e| {
+            tracing::error!(server_id = %server_id, error = %e, "Failed to spawn TShock process");
+            AppError::ProcessError(format!("Failed to start server: {}", e))
+        })?;
 
         let pid = child.id().unwrap_or(0);
         tracing::info!(server_id = %server_id, pid = pid, "TShock process spawned");
@@ -331,7 +329,10 @@ impl ProcessManager {
                 (process.stdin_tx.clone(), process.pid)
             } else {
                 tracing::warn!(server_id = %server_id, "Cannot stop: server not running");
-                return Err(AppError::NotFound(format!("Server {} not running", server_id)));
+                return Err(AppError::NotFound(format!(
+                    "Server {} not running",
+                    server_id
+                )));
             }
         };
 
@@ -381,7 +382,10 @@ impl ProcessManager {
                 process.pid
             } else {
                 tracing::warn!(server_id = %server_id, "Cannot kill: server not running");
-                return Err(AppError::NotFound(format!("Server {} not running", server_id)));
+                return Err(AppError::NotFound(format!(
+                    "Server {} not running",
+                    server_id
+                )));
             }
         };
 
@@ -396,9 +400,14 @@ impl ProcessManager {
             use nix::sys::signal::{kill, Signal};
             use nix::unistd::Pid;
 
-            let signal = if force { Signal::SIGKILL } else { Signal::SIGTERM };
-            kill(Pid::from_raw(pid as i32), signal)
-                .map_err(|e| AppError::ProcessError(format!("Failed to signal process {}: {}", pid, e)))?;
+            let signal = if force {
+                Signal::SIGKILL
+            } else {
+                Signal::SIGTERM
+            };
+            kill(Pid::from_raw(pid as i32), signal).map_err(|e| {
+                AppError::ProcessError(format!("Failed to signal process {}: {}", pid, e))
+            })?;
             Ok(())
         }
 
@@ -425,7 +434,10 @@ impl ProcessManager {
                 })
         } else {
             tracing::warn!(server_id = %server_id, command = %command, "Cannot send command: server not running");
-            Err(AppError::NotFound(format!("Server {} not running", server_id)))
+            Err(AppError::NotFound(format!(
+                "Server {} not running",
+                server_id
+            )))
         }
     }
 
@@ -440,13 +452,19 @@ impl ProcessManager {
         }
     }
 
-    pub async fn subscribe_logs(&self, server_id: &str) -> Result<broadcast::Receiver<String>, AppError> {
+    pub async fn subscribe_logs(
+        &self,
+        server_id: &str,
+    ) -> Result<broadcast::Receiver<String>, AppError> {
         let processes = self.processes.read().await;
 
         if let Some(process) = processes.get(server_id) {
             Ok(process.log_tx.subscribe())
         } else {
-            Err(AppError::NotFound(format!("Server {} not running", server_id)))
+            Err(AppError::NotFound(format!(
+                "Server {} not running",
+                server_id
+            )))
         }
     }
 
@@ -559,11 +577,13 @@ impl ProcessManager {
             if let Some(version) = runtime_options
                 .get("frameworks")
                 .and_then(|frameworks| frameworks.as_array())
-                .and_then(|frameworks| frameworks.iter().find_map(|framework| {
-                    framework
-                        .get("version")
-                        .and_then(|version| version.as_str())
-                }))
+                .and_then(|frameworks| {
+                    frameworks.iter().find_map(|framework| {
+                        framework
+                            .get("version")
+                            .and_then(|version| version.as_str())
+                    })
+                })
             {
                 return version.split('.').next()?.parse::<u32>().ok();
             }

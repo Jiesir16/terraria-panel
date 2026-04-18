@@ -2,20 +2,20 @@ use axum::{
     extract::{Path, State},
     Json,
 };
+use chrono::Utc;
+use rusqlite::{params, Connection};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
-use chrono::Utc;
-use rusqlite::{params, Connection};
 
 use crate::{
     auth::Auth,
     error::AppError,
-    models::{
-        CreateServerRequest, UpdateServerRequest, Server, ServerConfig, ServerDetail, CommandRequest,
-        TShockSecurityOverview, TShockGroupSummary, TShockUserAccount, SscConfig,
-    },
     handlers::AppState,
+    models::{
+        CommandRequest, CreateServerRequest, Server, ServerConfig, ServerDetail, SscConfig,
+        TShockGroupSummary, TShockSecurityOverview, TShockUserAccount, UpdateServerRequest,
+    },
 };
 
 #[cfg(target_os = "linux")]
@@ -157,9 +157,7 @@ fn resolve_world_path(world_dir: &std::path::Path, world_name: &str) -> Option<S
                 continue;
             };
 
-            if fname.ends_with(".wld")
-                && (fname == normalized || fname.starts_with(world_name))
-            {
+            if fname.ends_with(".wld") && (fname == normalized || fname.starts_with(world_name)) {
                 return Some(path.to_string_lossy().to_string());
             }
         }
@@ -209,10 +207,7 @@ fn write_server_config_file(
         let target_world_path = server_dir.join("world").join(&world_name);
         lines.push(format!("world={}", target_world_path.display()));
         lines.push(format!("autocreate={}", size));
-        lines.push(format!(
-            "worldname={}",
-            world_name.trim_end_matches(".wld")
-        ));
+        lines.push(format!("worldname={}", world_name.trim_end_matches(".wld")));
         lines.push(format!("difficulty={}", difficulty.unwrap_or(0)));
         if let Some(seed) = seed {
             if !seed.is_empty() {
@@ -240,7 +235,8 @@ fn sync_tshock_runtime_config(
     let mut config = if config_path.exists() {
         let content = std::fs::read_to_string(&config_path)
             .map_err(|e| AppError::FileError(format!("Failed to read config.json: {}", e)))?;
-        serde_json::from_str::<serde_json::Value>(&content).unwrap_or_else(|_| serde_json::json!({}))
+        serde_json::from_str::<serde_json::Value>(&content)
+            .unwrap_or_else(|_| serde_json::json!({}))
     } else {
         serde_json::json!({})
     };
@@ -298,33 +294,27 @@ fn sync_ssc_runtime_config(
     };
 
     let ssc_config_path = config_dir.join("sscconfig.json");
-    let mut ssc_json_value = if ssc_config_path.exists() {
+    let mut ssc_config = if ssc_config_path.exists() {
         let content = std::fs::read_to_string(&ssc_config_path)
             .map_err(|e| AppError::FileError(format!("Failed to read sscconfig.json: {}", e)))?;
-        match serde_json::from_str::<serde_json::Value>(&content) {
-            Ok(value) if value.is_object() => value,
-            Ok(_) => serde_json::to_value(SscConfig::default())
-                .map_err(|e| AppError::BadRequest(format!("Failed to build default sscconfig.json: {}", e)))?,
+        match serde_json::from_str::<SscConfig>(&content) {
+            Ok(value) => value,
             Err(e) => {
                 tracing::warn!(
                     path = %ssc_config_path.display(),
                     error = %e,
-                    "Invalid sscconfig.json before startup, preserving only canonical Enabled sync"
+                    "Invalid sscconfig.json before startup, falling back to canonical defaults"
                 );
-                serde_json::to_value(SscConfig::default())
-                    .map_err(|err| AppError::BadRequest(format!("Failed to build default sscconfig.json: {}", err)))?
+                SscConfig::default()
             }
         }
     } else {
-        serde_json::to_value(SscConfig::default())
-            .map_err(|e| AppError::BadRequest(format!("Failed to build default sscconfig.json: {}", e)))?
+        SscConfig::default()
     };
 
-    if let Some(obj) = ssc_json_value.as_object_mut() {
-        obj.insert("Enabled".to_string(), serde_json::json!(enabled));
-    }
+    ssc_config.set_enabled(enabled);
 
-    let content = serde_json::to_string_pretty(&ssc_json_value)
+    let content = serde_json::to_string_pretty(&ssc_config)
         .map_err(|e| AppError::BadRequest(format!("Failed to serialize sscconfig.json: {}", e)))?;
     std::fs::write(&ssc_config_path, content)
         .map_err(|e| AppError::FileError(format!("Failed to write sscconfig.json: {}", e)))?;
@@ -428,7 +418,8 @@ fn load_tshock_security_overview(
     let config_json = if config_json_path.exists() {
         let content = std::fs::read_to_string(&config_json_path)
             .map_err(|e| AppError::FileError(format!("Failed to read config.json: {}", e)))?;
-        serde_json::from_str::<serde_json::Value>(&content).unwrap_or_else(|_| serde_json::json!({}))
+        serde_json::from_str::<serde_json::Value>(&content)
+            .unwrap_or_else(|_| serde_json::json!({}))
     } else {
         serde_json::json!({})
     };
@@ -453,11 +444,8 @@ fn load_tshock_security_overview(
     let (ssc_enabled, ssc_source) = if ssc_config_path.exists() {
         let content = std::fs::read_to_string(&ssc_config_path)
             .map_err(|e| AppError::FileError(format!("Failed to read sscconfig.json: {}", e)))?;
-        let value = serde_json::from_str::<serde_json::Value>(&content)
-            .unwrap_or_else(|_| serde_json::json!({}));
-        let enabled = value
-            .get("Enabled")
-            .and_then(|v| v.as_bool())
+        let enabled = serde_json::from_str::<SscConfig>(&content)
+            .map(|config| config.enabled())
             .unwrap_or(false);
         (enabled, "sscconfig.json".to_string())
     } else {
@@ -482,54 +470,66 @@ fn load_tshock_security_overview(
     let table_names = {
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
-            .map_err(|e| AppError::DatabaseError(format!("Failed to inspect tshock.sqlite tables: {}", e)))?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| AppError::DatabaseError(format!("Failed to read sqlite_master rows: {}", e)))?;
-        rows.collect::<Result<BTreeSet<_>, _>>()
-            .map_err(|e| AppError::DatabaseError(format!("Failed to collect sqlite table names: {}", e)))?
+            .map_err(|e| {
+                AppError::DatabaseError(format!("Failed to inspect tshock.sqlite tables: {}", e))
+            })?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| {
+                AppError::DatabaseError(format!("Failed to read sqlite_master rows: {}", e))
+            })?;
+        rows.collect::<Result<BTreeSet<_>, _>>().map_err(|e| {
+            AppError::DatabaseError(format!("Failed to collect sqlite table names: {}", e))
+        })?
     };
 
     let user_rows = {
         let mut stmt = conn
             .prepare("SELECT Username, Usergroup FROM Users ORDER BY Username")
             .map_err(|e| AppError::DatabaseError(format!("Failed to query Users table: {}", e)))?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-            ))
-        })
-        .map_err(|e| AppError::DatabaseError(format!("Failed to read Users rows: {}", e)))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .map_err(|e| AppError::DatabaseError(format!("Failed to read Users rows: {}", e)))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| AppError::DatabaseError(format!("Failed to collect Users rows: {}", e)))?
     };
 
     let permission_rows = if table_names.contains("GroupPermissions") {
         let mut stmt = conn
-            .prepare("SELECT GroupName, Permission FROM GroupPermissions ORDER BY GroupName, Permission")
-            .map_err(|e| AppError::DatabaseError(format!("Failed to query GroupPermissions table: {}", e)))?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-            ))
-        })
-        .map_err(|e| AppError::DatabaseError(format!("Failed to read GroupPermissions rows: {}", e)))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AppError::DatabaseError(format!("Failed to collect GroupPermissions rows: {}", e)))?
+            .prepare(
+                "SELECT GroupName, Permission FROM GroupPermissions ORDER BY GroupName, Permission",
+            )
+            .map_err(|e| {
+                AppError::DatabaseError(format!("Failed to query GroupPermissions table: {}", e))
+            })?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| {
+                AppError::DatabaseError(format!("Failed to read GroupPermissions rows: {}", e))
+            })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
+            AppError::DatabaseError(format!("Failed to collect GroupPermissions rows: {}", e))
+        })?
     } else if table_names.contains("Permissions") {
         let mut stmt = conn
             .prepare("SELECT GroupName, Permission FROM Permissions ORDER BY GroupName, Permission")
-            .map_err(|e| AppError::DatabaseError(format!("Failed to query Permissions table: {}", e)))?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-            ))
-        })
-        .map_err(|e| AppError::DatabaseError(format!("Failed to read Permissions rows: {}", e)))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AppError::DatabaseError(format!("Failed to collect Permissions rows: {}", e)))?
+            .map_err(|e| {
+                AppError::DatabaseError(format!("Failed to query Permissions table: {}", e))
+            })?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| {
+                AppError::DatabaseError(format!("Failed to read Permissions rows: {}", e))
+            })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
+            AppError::DatabaseError(format!("Failed to collect Permissions rows: {}", e))
+        })?
     } else {
         Vec::new()
     };
@@ -546,11 +546,12 @@ fn load_tshock_security_overview(
         let mut stmt = conn
             .prepare("SELECT GroupName FROM Groups ORDER BY GroupName")
             .map_err(|e| AppError::DatabaseError(format!("Failed to query Groups table: {}", e)))?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
             .map_err(|e| AppError::DatabaseError(format!("Failed to read Groups rows: {}", e)))?;
-        let group_names = rows
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AppError::DatabaseError(format!("Failed to collect Groups rows: {}", e)))?;
+        let group_names = rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
+            AppError::DatabaseError(format!("Failed to collect Groups rows: {}", e))
+        })?;
         for group_name in group_names {
             group_permissions.entry(group_name).or_default();
         }
@@ -565,9 +566,7 @@ fn load_tshock_security_overview(
     let users = user_rows
         .into_iter()
         .map(|(username, group_name)| {
-            let normalized_group = group_name
-                .as_deref()
-                .map(|g| g.to_ascii_lowercase());
+            let normalized_group = group_name.as_deref().map(|g| g.to_ascii_lowercase());
             let ignores_ssc = group_name
                 .as_ref()
                 .and_then(|g| group_permissions.get(g))
@@ -688,7 +687,12 @@ pub async fn create_server(
     .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
     // Create server directories
-    let server_dir = state.config.server.data_dir.join("servers").join(&server_id);
+    let server_dir = state
+        .config
+        .server
+        .data_dir
+        .join("servers")
+        .join(&server_id);
     tracing::debug!(server_id = %server_id, path = %server_dir.display(), "Creating server directories");
     std::fs::create_dir_all(server_dir.join("world"))
         .map_err(|e| AppError::FileError(e.to_string()))?;
@@ -711,7 +715,9 @@ pub async fn create_server(
     // Log after db lock is released
     drop(db);
     crate::db::log_operation(
-        &state.db, &auth.user_id, "创建服务器",
+        &state.db,
+        &auth.user_id,
+        "创建服务器",
         Some(&req.name),
         Some(&format!("端口: {}, 版本: {}", port, req.tshock_version)),
     );
@@ -888,7 +894,13 @@ pub async fn update_server(
         server.name, server.port, server.tshock_version, server.world_name, server.max_players
     );
     drop(db);
-    crate::db::log_operation(&state.db, &auth.user_id, "更新服务器", Some(&id), Some(&detail_summary));
+    crate::db::log_operation(
+        &state.db,
+        &auth.user_id,
+        "更新服务器",
+        Some(&id),
+        Some(&detail_summary),
+    );
 
     Ok(Json(server))
 }
@@ -918,8 +930,7 @@ pub async fn delete_server(
     let server_dir = state.config.server.data_dir.join("servers").join(&id);
     if server_dir.exists() {
         tracing::debug!(server_id = %id, path = %server_dir.display(), "Removing server directory");
-        std::fs::remove_dir_all(server_dir)
-            .map_err(|e| AppError::FileError(e.to_string()))?;
+        std::fs::remove_dir_all(server_dir).map_err(|e| AppError::FileError(e.to_string()))?;
     }
 
     tracing::info!(user = %auth.username, server_id = %id, "Server deleted successfully");
@@ -1004,12 +1015,7 @@ pub async fn start_server(
         "Resolved TShock version path"
     );
 
-    let server_dir = state
-        .config
-        .server
-        .data_dir
-        .join("servers")
-        .join(&id);
+    let server_dir = state.config.server.data_dir.join("servers").join(&id);
 
     // Ensure server directories exist (they should from create, but verify)
     let _ = std::fs::create_dir_all(server_dir.join("world"));
@@ -1021,11 +1027,13 @@ pub async fn start_server(
     let panel_config = {
         let panel_config_path = config_path.join("panel-config.json");
         if panel_config_path.exists() {
-            let config_str = std::fs::read_to_string(&panel_config_path)
-                .map_err(|e| AppError::FileError(format!("Failed to read panel-config.json: {}", e)))?;
+            let config_str = std::fs::read_to_string(&panel_config_path).map_err(|e| {
+                AppError::FileError(format!("Failed to read panel-config.json: {}", e))
+            })?;
             Some(
-                serde_json::from_str::<ServerConfig>(&config_str)
-                    .map_err(|e| AppError::BadRequest(format!("Invalid panel-config.json: {}", e)))?,
+                serde_json::from_str::<ServerConfig>(&config_str).map_err(|e| {
+                    AppError::BadRequest(format!("Invalid panel-config.json: {}", e))
+                })?,
             )
         } else {
             None
@@ -1096,10 +1104,12 @@ pub async fn start_server(
             let config_json_path = config_path.join("config.json");
             if config_json_path.exists() {
                 let config_str = std::fs::read_to_string(&config_json_path).unwrap_or_default();
-                let config: serde_json::Value = serde_json::from_str(&config_str).unwrap_or_default();
+                let config: serde_json::Value =
+                    serde_json::from_str(&config_str).unwrap_or_default();
                 let width = config.get("world_width").and_then(|v| v.as_u64());
                 let size = map_world_width_to_autocreate(width);
-                let wn = config.get("world_name")
+                let wn = config
+                    .get("world_name")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .or(world_name_clone.clone())
@@ -1114,7 +1124,12 @@ pub async fn start_server(
                     .map(|s| s.to_string());
                 (Some(size), wn, difficulty, seed)
             } else {
-                (Some(2), world_name_clone.or_else(|| Some(effective_server_name.clone())), Some(0), None)
+                (
+                    Some(2),
+                    world_name_clone.or_else(|| Some(effective_server_name.clone())),
+                    Some(0),
+                    None,
+                )
             }
         }
     } else {
@@ -1187,9 +1202,14 @@ pub async fn start_server(
     }
 
     crate::db::log_operation(
-        &state.db, &auth.user_id, "启动服务器",
+        &state.db,
+        &auth.user_id,
+        "启动服务器",
         Some(&server_name),
-        Some(&format!("端口: {}, 版本: {}", effective_port, tshock_version)),
+        Some(&format!(
+            "端口: {}, 版本: {}",
+            effective_port, tshock_version
+        )),
     );
 
     Ok(Json(json!({
@@ -1319,12 +1339,17 @@ pub async fn send_command(
         ));
     }
 
-    state.process_manager.send_command(&id, &req.command).await?;
+    state
+        .process_manager
+        .send_command(&id, &req.command)
+        .await?;
 
     tracing::debug!(server_id = %id, command = %req.command, "Command sent successfully");
 
     crate::db::log_operation(
-        &state.db, &auth.user_id, "发送命令",
+        &state.db,
+        &auth.user_id,
+        "发送命令",
         Some(&id),
         Some(&req.command),
     );
@@ -1426,7 +1451,10 @@ pub async fn list_worlds(
         let a_bak = a["is_backup"].as_bool().unwrap_or(false);
         let b_bak = b["is_backup"].as_bool().unwrap_or(false);
         a_bak.cmp(&b_bak).then_with(|| {
-            a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
+            a["name"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["name"].as_str().unwrap_or(""))
         })
     });
 

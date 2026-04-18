@@ -49,8 +49,8 @@ impl Config {
     }
 
     pub fn from_env_or_default() -> Result<Self, Box<dyn std::error::Error>> {
-        let path = std::env::var("TERRARIA_CONSOLE_CONFIG")
-            .unwrap_or_else(|_| "config.toml".to_string());
+        let path =
+            std::env::var("TERRARIA_CONSOLE_CONFIG").unwrap_or_else(|_| "config.toml".to_string());
 
         let mut config = if std::path::Path::new(&path).exists() {
             Self::from_file(&path)?

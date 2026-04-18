@@ -6,11 +6,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
 
-use crate::{
-    auth::Auth,
-    error::AppError,
-    handlers::AppState,
-};
+use crate::{auth::Auth, error::AppError, handlers::AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct DownloadVersionRequest {
@@ -55,7 +51,11 @@ pub async fn available_versions(
         .min(50)
         .max(1);
 
-    tracing::info!(page = page, per_page = per_page, "Fetching available TShock versions from GitHub");
+    tracing::info!(
+        page = page,
+        per_page = per_page,
+        "Fetching available TShock versions from GitHub"
+    );
 
     let result = state
         .version_manager
@@ -66,7 +66,11 @@ pub async fn available_versions(
             AppError::InternalServerError(e.to_string())
         })?;
 
-    tracing::info!(total = result.total, page = result.page, "Fetched available versions");
+    tracing::info!(
+        total = result.total,
+        page = result.page,
+        "Fetched available versions"
+    );
     Ok(Json(result))
 }
 
@@ -164,8 +168,17 @@ pub async fn set_proxy(
     let mirror = req.mirror.trim().to_string();
     tracing::info!(user = %auth.username, mirror = %mirror, "Updating GitHub mirror/proxy");
 
-    state.version_manager.set_github_mirror(mirror.clone()).await;
-    crate::db::log_operation(&state.db, &auth.user_id, "更新代理设置", None, Some(&mirror));
+    state
+        .version_manager
+        .set_github_mirror(mirror.clone())
+        .await;
+    crate::db::log_operation(
+        &state.db,
+        &auth.user_id,
+        "更新代理设置",
+        None,
+        Some(&mirror),
+    );
 
     Ok(Json(json!({
         "success": true,

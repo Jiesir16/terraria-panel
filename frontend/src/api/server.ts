@@ -70,15 +70,22 @@ export interface SscInventoryItem {
   netID: number
   prefix: number
   stack: number
+  favorited: boolean
 }
 
-export interface SscConfig {
+export interface SscConfigSettings {
   Enabled: boolean
   ServerSideCharacterSave: number
   LogonDiscardThreshold: number
   StartingHealth: number
   StartingMana: number
   StartingInventory: SscInventoryItem[]
+  WarnPlayersAboutBypassPermission: boolean
+  KeepPlayerAppearance: boolean
+}
+
+export interface SscConfig {
+  Settings: SscConfigSettings
 }
 
 export interface TShockUserAccount {

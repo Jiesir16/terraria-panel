@@ -30,26 +30,11 @@ pub fn required_scope(command: &str) -> CommandScope {
 
     match normalized.as_str() {
         "/who" | "/playing" | "/time" | "/world" | "/rules" | "/help" => CommandScope::Viewer,
-        "/save"
-        | "/time day"
-        | "/time night"
-        | "/butcher"
-        | "/broadcast"
-        | "/kick"
-        | "/ban"
-        | "/mute"
-        | "/tp"
-        | "/tphere"
-        | "/settle" => CommandScope::Operator,
+        "/save" | "/time day" | "/time night" | "/butcher" | "/broadcast" | "/kick" | "/ban"
+        | "/mute" | "/tp" | "/tphere" | "/settle" => CommandScope::Operator,
         "/off" | "/reload" | "/whitelist" | "/region" => CommandScope::Owner,
-        "/group list"
-        | "/user list"
-        | "/gbuff"
-        | "/grow"
-        | "/spawnmob"
-        | "/give"
-        | "/antibuild"
-        | "/godmode" => CommandScope::Admin,
+        "/group list" | "/user list" | "/gbuff" | "/grow" | "/spawnmob" | "/give"
+        | "/antibuild" | "/godmode" => CommandScope::Admin,
         _ => {
             if normalized.starts_with('/') {
                 CommandScope::Owner

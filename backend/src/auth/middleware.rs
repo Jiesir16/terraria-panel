@@ -1,9 +1,5 @@
 use crate::error::AppError;
-use axum::{
-    async_trait,
-    extract::FromRequestParts,
-    http::request::Parts,
-};
+use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

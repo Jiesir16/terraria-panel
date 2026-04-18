@@ -7,8 +7,8 @@ use serde_json::json;
 use crate::{
     auth::Auth,
     error::AppError,
-    models::{ServerConfig, SscConfig},
     handlers::AppState,
+    models::{ServerConfig, SscConfig},
 };
 
 fn load_panel_config(config_dir: &std::path::Path) -> Result<Option<ServerConfig>, AppError> {
@@ -30,8 +30,8 @@ fn load_tshock_config(config_dir: &std::path::Path) -> Result<Option<ServerConfi
         return Ok(None);
     }
 
-    let config_str = std::fs::read_to_string(&config_path)
-        .map_err(|e| AppError::FileError(e.to_string()))?;
+    let config_str =
+        std::fs::read_to_string(&config_path).map_err(|e| AppError::FileError(e.to_string()))?;
 
     if let Ok(config) = serde_json::from_str::<ServerConfig>(&config_str) {
         return Ok(Some(config));
@@ -64,12 +64,9 @@ fn load_ssc_config(config_dir: &std::path::Path) -> Result<Option<SscConfig>, Ap
     }
 }
 
-fn merge_ssc_settings(
-    mut config: ServerConfig,
-    ssc_config: Option<&SscConfig>,
-) -> ServerConfig {
+fn merge_ssc_settings(mut config: ServerConfig, ssc_config: Option<&SscConfig>) -> ServerConfig {
     if let Some(ssc_config) = ssc_config {
-        config.server_side_character = Some(ssc_config.enabled);
+        config.server_side_character = Some(ssc_config.enabled());
     }
 
     config
@@ -81,43 +78,18 @@ fn sync_ssc_config(config_dir: &std::path::Path, config: &ServerConfig) -> Resul
     };
 
     let ssc_config_path = config_dir.join("sscconfig.json");
-    let mut ssc_json_value = if ssc_config_path.exists() {
-        let content = std::fs::read_to_string(&ssc_config_path)
-            .map_err(|e| AppError::FileError(e.to_string()))?;
-        match serde_json::from_str::<serde_json::Value>(&content) {
-            Ok(value) if value.is_object() => value,
-            Ok(_) => serde_json::to_value(SscConfig::default())
-                .map_err(|e| AppError::BadRequest(format!("Failed to build default sscconfig.json: {}", e)))?,
-            Err(e) => {
-                tracing::warn!(
-                    path = %ssc_config_path.display(),
-                    error = %e,
-                    "Invalid sscconfig.json while syncing Enabled, preserving defaults for missing structure only"
-                );
-                serde_json::to_value(SscConfig::default())
-                    .map_err(|err| AppError::BadRequest(format!("Failed to build default sscconfig.json: {}", err)))?
-            }
-        }
-    } else {
-        serde_json::to_value(SscConfig::default())
-            .map_err(|e| AppError::BadRequest(format!("Failed to build default sscconfig.json: {}", e)))?
-    };
+    let mut ssc_config = load_ssc_config(config_dir)?.unwrap_or_default();
+    ssc_config.set_enabled(enabled);
 
-    if let Some(obj) = ssc_json_value.as_object_mut() {
-        obj.insert("Enabled".to_string(), json!(enabled));
-    }
-
-    let ssc_json = serde_json::to_string_pretty(&ssc_json_value)
+    let ssc_json = serde_json::to_string_pretty(&ssc_config)
         .map_err(|e| AppError::BadRequest(format!("Failed to serialize sscconfig.json: {}", e)))?;
-    std::fs::write(&ssc_config_path, ssc_json)
-        .map_err(|e| AppError::FileError(e.to_string()))?;
+    std::fs::write(&ssc_config_path, ssc_json).map_err(|e| AppError::FileError(e.to_string()))?;
 
     Ok(())
 }
 
 fn save_config_files(config_dir: &std::path::Path, config: &ServerConfig) -> Result<(), AppError> {
-    std::fs::create_dir_all(config_dir)
-        .map_err(|e| AppError::FileError(e.to_string()))?;
+    std::fs::create_dir_all(config_dir).map_err(|e| AppError::FileError(e.to_string()))?;
 
     let panel_config_path = config_dir.join("panel-config.json");
     let panel_json = serde_json::to_string_pretty(config)
@@ -255,7 +227,9 @@ pub async fn update_config(
     })))
 }
 
-pub async fn list_templates(_auth: Auth) -> Result<Json<Vec<crate::models::ServerConfigTemplate>>, AppError> {
+pub async fn list_templates(
+    _auth: Auth,
+) -> Result<Json<Vec<crate::models::ServerConfigTemplate>>, AppError> {
     let templates = crate::models::get_templates();
     Ok(Json(templates))
 }
@@ -353,23 +327,27 @@ pub async fn update_ssc_config(
         .join(&server_id)
         .join("tshock");
 
-    std::fs::create_dir_all(&config_dir)
-        .map_err(|e| AppError::FileError(e.to_string()))?;
+    std::fs::create_dir_all(&config_dir).map_err(|e| AppError::FileError(e.to_string()))?;
 
     let ssc_config_path = config_dir.join("sscconfig.json");
     let ssc_json = serde_json::to_string_pretty(&ssc_config)
         .map_err(|e| AppError::BadRequest(format!("Invalid SSC config: {}", e)))?;
-    std::fs::write(&ssc_config_path, ssc_json)
-        .map_err(|e| AppError::FileError(e.to_string()))?;
+    std::fs::write(&ssc_config_path, ssc_json).map_err(|e| AppError::FileError(e.to_string()))?;
 
     let mut merged_config = load_panel_config(&config_dir)?
         .or(load_tshock_config(&config_dir)?)
         .unwrap_or_default();
-    merged_config.server_side_character = Some(ssc_config.enabled);
+    merged_config.server_side_character = Some(ssc_config.enabled());
     save_config_files(&config_dir, &merged_config)?;
     sync_server_row_from_config(&state, &server_id, &merged_config)?;
 
-    crate::db::log_operation(&state.db, &auth.user_id, "更新SSC配置", Some(&server_id), None);
+    crate::db::log_operation(
+        &state.db,
+        &auth.user_id,
+        "更新SSC配置",
+        Some(&server_id),
+        None,
+    );
 
     Ok(Json(json!({
         "success": true,

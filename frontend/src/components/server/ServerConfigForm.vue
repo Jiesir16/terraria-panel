@@ -501,8 +501,8 @@ async function handleSave() {
   }
 }
 
-function handleSscConfigSaved(config: { Enabled: boolean }) {
-  formData.value.server_side_character = config.Enabled
+function handleSscConfigSaved(config: { Settings: { Enabled: boolean } }) {
+  formData.value.server_side_character = config.Settings.Enabled
 }
 
 onMounted(() => {

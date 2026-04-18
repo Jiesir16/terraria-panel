@@ -26,7 +26,12 @@ impl TokenManager {
         }
     }
 
-    pub fn generate(&self, user_id: String, username: String, role: String) -> Result<String, AppError> {
+    pub fn generate(
+        &self,
+        user_id: String,
+        username: String,
+        role: String,
+    ) -> Result<String, AppError> {
         let now = Utc::now();
         let expire = now + Duration::hours(self.expire_hours as i64);
 

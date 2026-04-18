@@ -1,16 +1,13 @@
-use axum::{
-    extract::State,
-    Json,
-};
-use serde_json::json;
-use uuid::Uuid;
+use axum::{extract::State, Json};
 use chrono::Utc;
 use rusqlite::params;
+use serde_json::json;
+use uuid::Uuid;
 
 use crate::{
-    auth::{Auth, verify_password, hash_password},
+    auth::{hash_password, verify_password, Auth},
     error::AppError,
-    models::{LoginRequest, LoginResponse, UserInfo, RegisterRequest, ChangePasswordRequest},
+    models::{ChangePasswordRequest, LoginRequest, LoginResponse, RegisterRequest, UserInfo},
 };
 
 #[derive(Clone)]
@@ -115,9 +112,7 @@ pub async fn register(
 
     if exists {
         tracing::warn!(new_user = %req.username, "Registration failed: username already exists");
-        return Err(AppError::Conflict(
-            "Username already exists".to_string(),
-        ));
+        return Err(AppError::Conflict("Username already exists".to_string()));
     }
 
     // Hash password and create user

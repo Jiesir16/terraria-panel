@@ -1,17 +1,13 @@
 use axum::{
     extract::{ws::WebSocketUpgrade, Path, Query, State},
-    Json,
     response::Response,
+    Json,
 };
-use std::collections::VecDeque;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 
-use crate::{
-    auth::Auth,
-    error::AppError,
-    handlers::AppState,
-};
+use crate::{auth::Auth, error::AppError, handlers::AppState};
 
 fn get_server_owner_id(state: &AppState, server_id: &str) -> Result<Option<String>, AppError> {
     let db = state.db.lock().map_err(|_| {
@@ -38,12 +34,10 @@ pub async fn ws_console(
     tracing::info!(server_id = %id, "WebSocket console connection attempt");
 
     // Extract token from query parameters
-    let token = params
-        .get("token")
-        .ok_or_else(|| {
-            tracing::warn!(server_id = %id, "WebSocket rejected: missing token");
-            AppError::Unauthorized("Missing token".to_string())
-        })?;
+    let token = params.get("token").ok_or_else(|| {
+        tracing::warn!(server_id = %id, "WebSocket rejected: missing token");
+        AppError::Unauthorized("Missing token".to_string())
+    })?;
 
     // Verify token
     let claims = state.token_manager.verify(token)?;
@@ -57,14 +51,13 @@ pub async fn ws_console(
     // Check if server is running first
     if !state.process_manager.is_running(&id).await {
         tracing::warn!(server_id = %id, "WebSocket rejected: server not running");
-        return Err(AppError::NotFound("Server not found or offline".to_string()));
+        return Err(AppError::NotFound(
+            "Server not found or offline".to_string(),
+        ));
     }
 
     // Get server's broadcast channel
-    let log_rx = state
-        .process_manager
-        .subscribe_logs(&id)
-        .await?;
+    let log_rx = state.process_manager.subscribe_logs(&id).await?;
     let history_limit = params
         .get("history")
         .and_then(|value| value.parse::<usize>().ok())
@@ -90,7 +83,8 @@ pub async fn ws_console(
             state_for_handler,
             auth,
             server_owner_id,
-        ).await
+        )
+        .await
     }))
 }
 
@@ -157,8 +151,15 @@ async fn handle_ws_with_pm(
                     if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&text) {
                         if let Some(cmd) = payload.get("command").and_then(|v| v.as_str()) {
                             tracing::debug!(server_id = %server_id_clone, command = %cmd, "WebSocket command received");
-                            if crate::services::can_execute_command(&auth, server_owner_id.as_deref(), cmd) {
-                                let _ = state.process_manager.send_command(&server_id_clone, cmd).await;
+                            if crate::services::can_execute_command(
+                                &auth,
+                                server_owner_id.as_deref(),
+                                cmd,
+                            ) {
+                                let _ = state
+                                    .process_manager
+                                    .send_command(&server_id_clone, cmd)
+                                    .await;
                                 crate::db::log_operation(
                                     &state.db,
                                     &auth.user_id,
@@ -177,8 +178,15 @@ async fn handle_ws_with_pm(
                         }
                     } else if !text.is_empty() {
                         tracing::debug!(server_id = %server_id_clone, command = %text, "WebSocket raw command received");
-                        if crate::services::can_execute_command(&auth, server_owner_id.as_deref(), &text) {
-                            let _ = state.process_manager.send_command(&server_id_clone, &text).await;
+                        if crate::services::can_execute_command(
+                            &auth,
+                            server_owner_id.as_deref(),
+                            &text,
+                        ) {
+                            let _ = state
+                                .process_manager
+                                .send_command(&server_id_clone, &text)
+                                .await;
                             crate::db::log_operation(
                                 &state.db,
                                 &auth.user_id,
@@ -255,12 +263,8 @@ fn read_recent_logs_from_disk(
         .collect();
 
     files.sort_by(|a, b| {
-        let a_modified = std::fs::metadata(a)
-            .and_then(|m| m.modified())
-            .ok();
-        let b_modified = std::fs::metadata(b)
-            .and_then(|m| m.modified())
-            .ok();
+        let a_modified = std::fs::metadata(a).and_then(|m| m.modified()).ok();
+        let b_modified = std::fs::metadata(b).and_then(|m| m.modified()).ok();
         b_modified.cmp(&a_modified)
     });
 

@@ -3,23 +3,35 @@
     <n-spin :show="loading">
       <n-form :model="formData" label-placement="left" label-width="180px">
         <n-form-item label="启用 SSC">
-          <n-checkbox v-model:checked="formData.Enabled">启用服务端存档</n-checkbox>
+          <n-checkbox v-model:checked="formData.Settings.Enabled">启用服务端存档</n-checkbox>
         </n-form-item>
 
         <n-form-item label="保存间隔（分钟）">
-          <n-input-number v-model:value="formData.ServerSideCharacterSave" :min="1" :max="120" style="width: 100%;" />
+          <n-input-number v-model:value="formData.Settings.ServerSideCharacterSave" :min="1" :max="120" style="width: 100%;" />
         </n-form-item>
 
         <n-form-item label="登录丢弃阈值">
-          <n-input-number v-model:value="formData.LogonDiscardThreshold" :min="0" :max="9999" style="width: 100%;" />
+          <n-input-number v-model:value="formData.Settings.LogonDiscardThreshold" :min="0" :max="9999" style="width: 100%;" />
         </n-form-item>
 
         <n-form-item label="初始生命值">
-          <n-input-number v-model:value="formData.StartingHealth" :min="100" :max="500" style="width: 100%;" />
+          <n-input-number v-model:value="formData.Settings.StartingHealth" :min="100" :max="500" style="width: 100%;" />
         </n-form-item>
 
         <n-form-item label="初始魔力值">
-          <n-input-number v-model:value="formData.StartingMana" :min="20" :max="400" style="width: 100%;" />
+          <n-input-number v-model:value="formData.Settings.StartingMana" :min="20" :max="400" style="width: 100%;" />
+        </n-form-item>
+
+        <n-form-item label="绕过提醒">
+          <n-checkbox v-model:checked="formData.Settings.WarnPlayersAboutBypassPermission">
+            提醒拥有绕过权限的玩家 SSC 不生效
+          </n-checkbox>
+        </n-form-item>
+
+        <n-form-item label="保留外观">
+          <n-checkbox v-model:checked="formData.Settings.KeepPlayerAppearance">
+            保留玩家外观设置
+          </n-checkbox>
         </n-form-item>
 
         <n-form-item label="初始物品">
@@ -31,7 +43,7 @@
               <span class="field-hint">每行对应一个起始物品。`netID` 为 Terraria 物品 ID，负数通常是工具。</span>
             </div>
 
-            <div v-if="formData.StartingInventory.length === 0" class="empty-inventory">
+            <div v-if="formData.Settings.StartingInventory.length === 0" class="empty-inventory">
               当前没有初始物品
             </div>
 
@@ -40,17 +52,19 @@
                 <span>netID</span>
                 <span>prefix</span>
                 <span>stack</span>
+                <span>收藏</span>
                 <span>操作</span>
               </div>
 
               <div
-                v-for="(item, index) in formData.StartingInventory"
-                :key="`${index}-${item.netID}-${item.prefix}-${item.stack}`"
+                v-for="(item, index) in formData.Settings.StartingInventory"
+                :key="`${index}-${item.netID}-${item.prefix}-${item.stack}-${item.favorited}`"
                 class="inventory-row"
               >
                 <n-input-number v-model:value="item.netID" style="width: 100%;" />
                 <n-input-number v-model:value="item.prefix" :min="0" :max="255" style="width: 100%;" />
                 <n-input-number v-model:value="item.stack" :min="1" :max="9999" style="width: 100%;" />
+                <n-checkbox v-model:checked="item.favorited" />
                 <n-button size="small" type="error" quaternary @click="removeInventoryItem(index)">
                   删除
                 </n-button>
@@ -95,16 +109,20 @@ const notification = useNotification()
 const loading = ref(false)
 const saving = ref(false)
 const formData = ref<SscConfig>({
-  Enabled: false,
-  ServerSideCharacterSave: 5,
-  LogonDiscardThreshold: 250,
-  StartingHealth: 100,
-  StartingMana: 20,
-  StartingInventory: [
-    { netID: -15, prefix: 0, stack: 1 },
-    { netID: -13, prefix: 0, stack: 1 },
-    { netID: -16, prefix: 0, stack: 1 }
-  ]
+  Settings: {
+    Enabled: false,
+    ServerSideCharacterSave: 5,
+    LogonDiscardThreshold: 250,
+    StartingHealth: 100,
+    StartingMana: 20,
+    StartingInventory: [
+      { netID: -15, prefix: 0, stack: 1, favorited: false },
+      { netID: -13, prefix: 0, stack: 1, favorited: false },
+      { netID: -16, prefix: 0, stack: 1, favorited: false }
+    ],
+    WarnPlayersAboutBypassPermission: true,
+    KeepPlayerAppearance: false
+  }
 })
 
 const modalShow = computed({
@@ -120,7 +138,8 @@ function normalizeInventory(items: SscInventoryItem[] | undefined): SscInventory
   return items.map((item) => ({
     netID: Number(item?.netID ?? 0),
     prefix: Number(item?.prefix ?? 0),
-    stack: Math.max(1, Number(item?.stack ?? 1))
+    stack: Math.max(1, Number(item?.stack ?? 1)),
+    favorited: Boolean(item?.favorited ?? false)
   }))
 }
 
@@ -130,7 +149,10 @@ async function loadConfig() {
     const response = await serverApi.getSscConfig(props.serverId)
     formData.value = {
       ...response.data,
-      StartingInventory: normalizeInventory(response.data.StartingInventory)
+      Settings: {
+        ...response.data.Settings,
+        StartingInventory: normalizeInventory(response.data.Settings?.StartingInventory)
+      }
     }
   } catch (error: any) {
     notification.error('加载 SSC 配置失败', error?.response?.data?.error || '')
@@ -144,15 +166,16 @@ function handleCancel() {
 }
 
 function addInventoryItem() {
-  formData.value.StartingInventory.push({
+  formData.value.Settings.StartingInventory.push({
     netID: 0,
     prefix: 0,
-    stack: 1
+    stack: 1,
+    favorited: false
   })
 }
 
 function removeInventoryItem(index: number) {
-  formData.value.StartingInventory.splice(index, 1)
+  formData.value.Settings.StartingInventory.splice(index, 1)
 }
 
 async function handleSave() {
@@ -160,7 +183,10 @@ async function handleSave() {
   try {
     const payload: SscConfig = {
       ...formData.value,
-      StartingInventory: normalizeInventory(formData.value.StartingInventory)
+      Settings: {
+        ...formData.value.Settings,
+        StartingInventory: normalizeInventory(formData.value.Settings.StartingInventory)
+      }
     }
     await serverApi.updateSscConfig(props.serverId, payload)
     emit('saved', payload)
@@ -211,7 +237,7 @@ watch(
 .inventory-header,
 .inventory-row {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(100px, 1fr) minmax(100px, 1fr) 72px;
+  grid-template-columns: minmax(120px, 1fr) minmax(100px, 1fr) minmax(100px, 1fr) 64px 72px;
   gap: 8px;
   align-items: center;
 }

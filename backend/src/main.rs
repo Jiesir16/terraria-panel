@@ -28,7 +28,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load configuration
     let config = config::Config::from_env_or_default()?;
-    tracing::info!("Configuration loaded: host={}, port={}", config.server.host, config.server.port);
+    tracing::info!(
+        "Configuration loaded: host={}, port={}",
+        config.server.host,
+        config.server.port
+    );
 
     // Create data directories
     std::fs::create_dir_all(&config.server.data_dir)?;
@@ -40,7 +44,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(config.server.data_dir.join("uploads"))?;
 
     // Initialize database
-    let db = db::create_db(&config.server.data_dir.join("db").join("terraria-console.db"))?;
+    let db = db::create_db(
+        &config
+            .server
+            .data_dir
+            .join("db")
+            .join("terraria-console.db"),
+    )?;
     tracing::info!("Database initialized");
 
     // Initialize services
@@ -92,22 +102,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .put(handlers::server::update_server)
                 .delete(handlers::server::delete_server),
         )
-        .route("/api/servers/:id/start", post(handlers::server::start_server))
+        .route(
+            "/api/servers/:id/start",
+            post(handlers::server::start_server),
+        )
         .route("/api/servers/:id/stop", post(handlers::server::stop_server))
         .route("/api/servers/:id/kill", post(handlers::server::kill_server))
-        .route("/api/servers/:id/restart", post(handlers::server::restart_server))
-        .route("/api/servers/:id/command", post(handlers::server::send_command))
-        .route("/api/servers/:id/status", get(handlers::server::server_status))
-        .route("/api/servers/:id/worlds", get(handlers::server::list_worlds))
-        .route("/api/servers/:id/tshock-security", get(handlers::server::tshock_security_overview))
+        .route(
+            "/api/servers/:id/restart",
+            post(handlers::server::restart_server),
+        )
+        .route(
+            "/api/servers/:id/command",
+            post(handlers::server::send_command),
+        )
+        .route(
+            "/api/servers/:id/status",
+            get(handlers::server::server_status),
+        )
+        .route(
+            "/api/servers/:id/worlds",
+            get(handlers::server::list_worlds),
+        )
+        .route(
+            "/api/servers/:id/tshock-security",
+            get(handlers::server::tshock_security_overview),
+        )
         .route("/api/servers/:id/logs", get(handlers::console::recent_logs))
-        .route("/api/servers/:id/console", get(handlers::console::ws_console))
+        .route(
+            "/api/servers/:id/console",
+            get(handlers::console::ws_console),
+        )
         // Version endpoints
         .route("/api/versions", get(handlers::version::list_versions))
-        .route("/api/versions/available", get(handlers::version::available_versions))
-        .route("/api/versions/download", post(handlers::version::download_version))
-        .route("/api/versions/proxy", get(handlers::version::get_proxy).put(handlers::version::set_proxy))
-        .route("/api/versions/:version", delete(handlers::version::delete_version))
+        .route(
+            "/api/versions/available",
+            get(handlers::version::available_versions),
+        )
+        .route(
+            "/api/versions/download",
+            post(handlers::version::download_version),
+        )
+        .route(
+            "/api/versions/proxy",
+            get(handlers::version::get_proxy).put(handlers::version::set_proxy),
+        )
+        .route(
+            "/api/versions/:version",
+            delete(handlers::version::delete_version),
+        )
         // Mod endpoints
         .route(
             "/api/servers/:id/mods",
@@ -128,9 +171,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/saves/:id/import/:server_id",
             post(handlers::saves::import_save),
         )
-        .route("/api/saves/:id/download", get(handlers::saves::download_save))
+        .route(
+            "/api/saves/:id/download",
+            get(handlers::saves::download_save),
+        )
         .route("/api/saves/:id", delete(handlers::saves::delete_save))
-        .route("/api/servers/:id/backup", post(handlers::saves::backup_server))
+        .route(
+            "/api/servers/:id/backup",
+            post(handlers::saves::backup_server),
+        )
         // Config endpoints
         .route(
             "/api/servers/:id/config",
@@ -140,7 +189,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/servers/:id/ssc-config",
             get(handlers::config::get_ssc_config).put(handlers::config::update_ssc_config),
         )
-        .route("/api/config/templates", get(handlers::config::list_templates))
+        .route(
+            "/api/config/templates",
+            get(handlers::config::list_templates),
+        )
         .route(
             "/api/servers/:id/config/import",
             post(handlers::config::import_config),
@@ -166,11 +218,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(state);
 
     // Bind and serve
-    let listener = tokio::net::TcpListener::bind(format!(
-        "{}:{}",
-        config.server.host, config.server.port
-    ))
-    .await?;
+    let listener =
+        tokio::net::TcpListener::bind(format!("{}:{}", config.server.host, config.server.port))
+            .await?;
 
     tracing::info!(
         "Server listening on {}:{}",

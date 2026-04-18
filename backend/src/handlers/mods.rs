@@ -4,12 +4,7 @@ use axum::{
 };
 use serde_json::json;
 
-use crate::{
-    auth::Auth,
-    error::AppError,
-    models::ModList,
-    handlers::AppState,
-};
+use crate::{auth::Auth, error::AppError, handlers::AppState, models::ModList};
 
 pub async fn list_mods(
     State(state): State<AppState>,
@@ -108,7 +103,13 @@ pub async fn toggle_mod(
         .map_err(|e| AppError::InternalServerError(e.to_string()))?;
 
     tracing::info!(server_id = %server_id, mod_name = %mod_name, "Mod toggled successfully");
-    crate::db::log_operation(&state.db, &auth.user_id, "切换模组", Some(&server_id), Some(&mod_name));
+    crate::db::log_operation(
+        &state.db,
+        &auth.user_id,
+        "切换模组",
+        Some(&server_id),
+        Some(&mod_name),
+    );
 
     Ok(Json(json!({
         "success": true,
@@ -135,7 +136,13 @@ pub async fn delete_mod(
         .map_err(|e| AppError::InternalServerError(e.to_string()))?;
 
     tracing::info!(server_id = %server_id, mod_name = %mod_name, "Mod deleted successfully");
-    crate::db::log_operation(&state.db, &auth.user_id, "删除模组", Some(&server_id), Some(&mod_name));
+    crate::db::log_operation(
+        &state.db,
+        &auth.user_id,
+        "删除模组",
+        Some(&server_id),
+        Some(&mod_name),
+    );
 
     Ok(Json(json!({
         "success": true,
