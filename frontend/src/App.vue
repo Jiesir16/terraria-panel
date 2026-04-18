@@ -3,6 +3,7 @@
     <n-message-provider>
       <n-dialog-provider>
         <router-view />
+        <notification-container />
       </n-dialog-provider>
     </n-message-provider>
   </n-config-provider>
@@ -11,6 +12,7 @@
 <script setup lang="ts">
 import { computed, watchEffect } from 'vue'
 import { NConfigProvider, NMessageProvider, NDialogProvider, darkTheme, type GlobalThemeOverrides } from 'naive-ui'
+import NotificationContainer from './components/common/NotificationContainer.vue'
 import { useAppStore } from './stores/app'
 import './styles/global.css'
 

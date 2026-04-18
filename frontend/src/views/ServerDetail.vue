@@ -102,8 +102,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { NSpin, NTabs, NTabPane, NButton, useDialog } from 'naive-ui'
 import { useAuthStore } from '../stores/auth'
 import { useServersStore } from '../stores/servers'
@@ -118,6 +118,7 @@ import ModUploadModal from '../components/mod/ModUploadModal.vue'
 import SaveCard from '../components/save/SaveCard.vue'
 
 const route = useRoute()
+const router = useRouter()
 const authStore = useAuthStore()
 const serversStore = useServersStore()
 const notification = useNotification()
@@ -131,22 +132,43 @@ const showModUpload = ref(false)
 const mods = ref<any[]>([])
 const saves = ref<any[]>([])
 let statusPollTimer: ReturnType<typeof setInterval> | null = null
+const serverMissingHandled = ref(false)
 
 const currentServer = computed(() => serversStore.currentServer)
 
 const isCurrentServerActive = computed(() => currentServer.value?.status !== 'stopped')
 
-function setupStatusPoll() {
+function clearStatusPoll() {
   if (statusPollTimer) {
     clearInterval(statusPollTimer)
+    statusPollTimer = null
   }
+}
+
+function setupStatusPoll() {
+  clearStatusPoll()
   statusPollTimer = setInterval(() => {
-    serversStore.refreshServerRuntime(serverId.value).catch(() => {})
+    serversStore.refreshServerRuntime(serverId.value).catch((error: any) => {
+      if (error?.response?.status === 404) {
+        handleMissingServer()
+      }
+    })
   }, 5000)
+}
+
+function handleMissingServer() {
+  clearStatusPoll()
+  if (serverMissingHandled.value) {
+    return
+  }
+  serverMissingHandled.value = true
+  notification.error('服务器不存在', '当前服务器可能已被删除，已返回服务器列表')
+  router.replace('/servers')
 }
 
 // Watch for route param changes (e.g. navigating from server 1 to server 2)
 watch(serverId, () => {
+  serverMissingHandled.value = false
   loadServer()
   loadMods()
   loadSaves()
@@ -157,7 +179,11 @@ async function loadServer() {
   loading.value = true
   try {
     await serversStore.refreshServerRuntime(serverId.value)
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.response?.status === 404) {
+      handleMissingServer()
+      return
+    }
     notification.error('加载服务器失败', '')
   } finally {
     loading.value = false
@@ -349,17 +375,24 @@ async function handleBackup() {
 }
 
 onMounted(() => {
+  serverMissingHandled.value = false
   loadServer()
   loadMods()
   loadSaves()
   setupStatusPoll()
 })
 
+onActivated(() => {
+  serverMissingHandled.value = false
+  setupStatusPoll()
+})
+
+onDeactivated(() => {
+  clearStatusPoll()
+})
+
 onUnmounted(() => {
-  if (statusPollTimer) {
-    clearInterval(statusPollTimer)
-    statusPollTimer = null
-  }
+  clearStatusPoll()
 })
 </script>
 

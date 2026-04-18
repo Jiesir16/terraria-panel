@@ -14,23 +14,51 @@ use crate::{
     handlers::AppState,
 };
 
-async fn is_server_port_ready(port: u16) -> bool {
-    use tokio::net::TcpStream;
-    use tokio::time::{timeout, Duration};
+#[cfg(target_os = "linux")]
+fn proc_net_has_listening_port(path: &str, port: u16) -> bool {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return false;
+    };
 
-    let targets = [format!("127.0.0.1:{}", port), format!("[::1]:{}", port)];
-    for target in targets {
-        if timeout(Duration::from_millis(500), TcpStream::connect(&target))
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .is_some()
-        {
-            return true;
+    let expected = format!("{:04X}", port);
+    content.lines().skip(1).any(|line| {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 4 {
+            return false;
         }
+
+        let local_address = parts[1];
+        let state = parts[3];
+        state == "0A" && local_address.ends_with(&format!(":{}", expected))
+    })
+}
+
+async fn is_server_port_ready(port: u16) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        return proc_net_has_listening_port("/proc/net/tcp", port)
+            || proc_net_has_listening_port("/proc/net/tcp6", port);
     }
 
-    false
+    #[cfg(not(target_os = "linux"))]
+    {
+        use tokio::net::TcpStream;
+        use tokio::time::{timeout, Duration};
+
+        let targets = [format!("127.0.0.1:{}", port), format!("[::1]:{}", port)];
+        for target in targets {
+            if timeout(Duration::from_millis(500), TcpStream::connect(&target))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .is_some()
+            {
+                return true;
+            }
+        }
+
+        false
+    }
 }
 
 async fn wait_for_server_ready(
