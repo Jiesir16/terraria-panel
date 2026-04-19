@@ -111,3 +111,50 @@ pub struct TShockSecurityOverview {
     pub users: Vec<TShockUserAccount>,
     pub groups: Vec<TShockGroupSummary>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct TShockGroupDetail {
+    pub name: String,
+    pub parent: Option<String>,
+    pub permissions: Vec<String>,
+    pub member_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TShockSscCharacterSummary {
+    pub account: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    pub health: i32,
+    pub max_health: i32,
+    pub mana: i32,
+    pub max_mana: i32,
+    pub quests_completed: i32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TShockSscCharacter {
+    pub account: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    pub health: i32,
+    pub max_health: i32,
+    pub mana: i32,
+    pub max_mana: i32,
+    pub inventory: Option<String>,
+    pub extra_slot: Option<i32>,
+    pub spawn_x: Option<i32>,
+    pub spawn_y: Option<i32>,
+    pub skin_variant: Option<i32>,
+    pub hair: Option<i32>,
+    pub hair_dye: Option<i32>,
+    pub hair_color: Option<i32>,
+    pub pants_color: Option<i32>,
+    pub shirt_color: Option<i32>,
+    pub under_shirt_color: Option<i32>,
+    pub shoe_color: Option<i32>,
+    pub skin_color: Option<i32>,
+    pub eye_color: Option<i32>,
+    pub quests_completed: i32,
+    pub hide_visuals: Option<String>,
+}

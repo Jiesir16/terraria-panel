@@ -113,6 +113,41 @@ export interface TShockSecurityOverview {
   groups: TShockGroupSummary[]
 }
 
+export interface TShockGroupDetail {
+  name: string
+  parent?: string
+  permissions: string[]
+  member_count: number
+}
+
+export interface TShockSscCharacterSummary {
+  account: number
+  username?: string
+  health: number
+  max_health: number
+  mana: number
+  max_mana: number
+  quests_completed: number
+}
+
+export interface TShockSscCharacter extends TShockSscCharacterSummary {
+  inventory?: string
+  extra_slot?: number
+  spawn_x?: number
+  spawn_y?: number
+  skin_variant?: number
+  hair?: number
+  hair_dye?: number
+  hair_color?: number
+  pants_color?: number
+  shirt_color?: number
+  under_shirt_color?: number
+  shoe_color?: number
+  skin_color?: number
+  eye_color?: number
+  hide_visuals?: string
+}
+
 export const serverApi = {
   getList: () =>
     api.get<ServerStatus[]>('/servers'),
@@ -174,5 +209,39 @@ export const serverApi = {
     api.get<ServerConfig>(`/servers/${id}/config/export`),
 
   listWorlds: (id: string) =>
-    api.get<WorldFile[]>(`/servers/${id}/worlds`)
+    api.get<WorldFile[]>(`/servers/${id}/worlds`),
+
+  // TShock user management
+  updateTshockUserGroup: (id: string, username: string, group: string) =>
+    api.put(`/servers/${id}/tshock-users/${encodeURIComponent(username)}/group`, { group }),
+
+  deleteTshockUser: (id: string, username: string) =>
+    api.delete(`/servers/${id}/tshock-users/${encodeURIComponent(username)}`),
+
+  // TShock group management
+  getTshockGroup: (id: string, groupName: string) =>
+    api.get<TShockGroupDetail>(`/servers/${id}/tshock-groups/${encodeURIComponent(groupName)}`),
+
+  createTshockGroup: (id: string, name: string, parent?: string) =>
+    api.post(`/servers/${id}/tshock-groups`, { name, parent }),
+
+  deleteTshockGroup: (id: string, groupName: string) =>
+    api.delete(`/servers/${id}/tshock-groups/${encodeURIComponent(groupName)}`),
+
+  // TShock permission management
+  addTshockPermission: (id: string, groupName: string, permission: string) =>
+    api.post(`/servers/${id}/tshock-groups/${encodeURIComponent(groupName)}/permissions`, { permission }),
+
+  removeTshockPermission: (id: string, groupName: string, permission: string) =>
+    api.post(`/servers/${id}/tshock-groups/${encodeURIComponent(groupName)}/permissions/remove`, { permission }),
+
+  // SSC character management
+  listSscCharacters: (id: string) =>
+    api.get<TShockSscCharacterSummary[]>(`/servers/${id}/ssc-characters`),
+
+  exportSscCharacter: (id: string, accountId: number) =>
+    api.get<TShockSscCharacter>(`/servers/${id}/ssc-characters/${accountId}`),
+
+  backupSscCharacters: (id: string) =>
+    api.post(`/servers/${id}/ssc-characters/backup`)
 }

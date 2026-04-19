@@ -180,6 +180,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/servers/:id/backup",
             post(handlers::saves::backup_server),
         )
+        // TShock user/group/permission management
+        .route(
+            "/api/servers/:id/tshock-users/:username/group",
+            put(handlers::tshock::update_user_group),
+        )
+        .route(
+            "/api/servers/:id/tshock-users/:username",
+            delete(handlers::tshock::delete_user),
+        )
+        .route(
+            "/api/servers/:id/tshock-groups",
+            post(handlers::tshock::create_group),
+        )
+        .route(
+            "/api/servers/:id/tshock-groups/:name",
+            get(handlers::tshock::get_group)
+                .delete(handlers::tshock::delete_group),
+        )
+        .route(
+            "/api/servers/:id/tshock-groups/:name/permissions",
+            post(handlers::tshock::add_permission),
+        )
+        .route(
+            "/api/servers/:id/tshock-groups/:name/permissions/remove",
+            post(handlers::tshock::remove_permission),
+        )
+        // SSC character management
+        .route(
+            "/api/servers/:id/ssc-characters",
+            get(handlers::tshock::list_ssc_characters),
+        )
+        .route(
+            "/api/servers/:id/ssc-characters/backup",
+            post(handlers::tshock::backup_ssc_characters),
+        )
+        .route(
+            "/api/servers/:id/ssc-characters/:account_id",
+            get(handlers::tshock::export_ssc_character),
+        )
         // Config endpoints
         .route(
             "/api/servers/:id/config",

@@ -5,6 +5,7 @@ pub mod mods;
 pub mod saves;
 pub mod server;
 pub mod system;
+pub mod tshock;
 pub mod version;
 
 pub use auth::AppState;

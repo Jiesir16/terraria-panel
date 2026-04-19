@@ -45,77 +45,7 @@
         </n-tab-pane>
 
         <n-tab-pane v-if="authStore.isOperator" name="security" tab="TShock权限">
-          <div class="security-section">
-            <div class="section-header">
-              <h3>TShock 用户与组</h3>
-              <n-button text type="primary" @click="loadTshockSecurity" :loading="securityLoading">
-                刷新
-              </n-button>
-            </div>
-
-            <n-spin :show="securityLoading">
-              <div class="security-summary" v-if="tshockSecurity">
-                <n-alert :type="tshockSecurity.ssc_enabled ? 'success' : 'warning'" :show-icon="false">
-                  <div class="summary-line">
-                    <strong>SSC 状态：</strong>
-                    <span>{{ tshockSecurity.ssc_enabled ? '已启用' : '未启用' }}</span>
-                    <n-tag size="small" :type="tshockSecurity.ssc_enabled ? 'success' : 'warning'">
-                      {{ tshockSecurity.ssc_source }}
-                    </n-tag>
-                  </div>
-                  <div class="summary-line">
-                    <strong>默认注册组：</strong>
-                    <span>{{ tshockSecurity.default_registration_group || '未配置' }}</span>
-                  </div>
-                  <div class="summary-line">
-                    <strong>默认游客组：</strong>
-                    <span>{{ tshockSecurity.default_guest_group || '未配置' }}</span>
-                  </div>
-                  <div class="summary-line" v-if="!tshockSecurity.database_exists">
-                    <strong>数据库：</strong>
-                    <span>TShock 尚未生成 `tshock.sqlite`，先让服务器完整启动一次。</span>
-                  </div>
-                </n-alert>
-              </div>
-
-              <div v-if="tshockSecurity?.database_exists" class="security-grid">
-                <div class="security-card">
-                  <h4>用户账号</h4>
-                  <div v-if="tshockSecurity.users.length === 0" class="empty-note">暂无已注册 TShock 用户</div>
-                  <div v-else class="security-list">
-                    <div v-for="user in tshockSecurity.users" :key="user.username" class="security-item">
-                      <div class="item-main">
-                        <strong>{{ user.username }}</strong>
-                        <span class="muted">组：{{ user.group_name || '未分组' }}</span>
-                      </div>
-                      <div class="item-tags">
-                        <n-tag v-if="user.is_superadmin" size="small" type="error">superadmin</n-tag>
-                        <n-tag v-if="user.ignores_ssc" size="small" type="warning">绕过 SSC</n-tag>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="security-card">
-                  <h4>用户组权限</h4>
-                  <div v-if="tshockSecurity.groups.length === 0" class="empty-note">暂无可读的 TShock 组信息</div>
-                  <div v-else class="security-list">
-                    <div v-for="group in tshockSecurity.groups" :key="group.name" class="security-item">
-                      <div class="item-main">
-                        <strong>{{ group.name }}</strong>
-                        <span class="muted">权限数：{{ group.permission_count }}</span>
-                      </div>
-                      <div class="item-tags">
-                        <n-tag v-if="group.is_registration_group" size="small" type="info">默认注册组</n-tag>
-                        <n-tag v-if="group.is_guest_group" size="small">默认游客组</n-tag>
-                        <n-tag v-if="group.ignores_ssc" size="small" type="warning">含 tshock.ignore.ssc</n-tag>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </n-spin>
-          </div>
+          <tshock-manager :server-id="serverId" ref="tshockManagerRef" />
         </n-tab-pane>
 
         <n-tab-pane name="mods" tab="Mod管理">
@@ -178,16 +108,17 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NSpin, NTabs, NTabPane, NButton, NAlert, NTag, useDialog } from 'naive-ui'
+import { NSpin, NTabs, NTabPane, NButton, useDialog } from 'naive-ui'
 import { useAuthStore } from '../stores/auth'
 import { useServersStore } from '../stores/servers'
-import { serverApi, TShockSecurityOverview } from '../api/server'
+import { serverApi } from '../api/server'
 import { modsApi } from '../api/mods'
 import { savesApi } from '../api/saves'
 import { useNotification } from '../composables/useNotification'
 import ServerConsole from '../components/server/ServerConsole.vue'
 import ServerConfigForm from '../components/server/ServerConfigForm.vue'
 import ServerStatusBadge from '../components/server/ServerStatusBadge.vue'
+import TShockManager from '../components/server/TShockManager.vue'
 import ModCard from '../components/mod/ModCard.vue'
 import ModUploadModal from '../components/mod/ModUploadModal.vue'
 import SaveCard from '../components/save/SaveCard.vue'
@@ -206,8 +137,7 @@ const savesLoading = ref(false)
 const showModUpload = ref(false)
 const mods = ref<any[]>([])
 const saves = ref<any[]>([])
-const tshockSecurity = ref<TShockSecurityOverview | null>(null)
-const securityLoading = ref(false)
+const tshockManagerRef = ref<InstanceType<typeof TShockManager> | null>(null)
 let statusPollTimer: ReturnType<typeof setInterval> | null = null
 const serverMissingHandled = ref(false)
 
@@ -247,7 +177,6 @@ function handleMissingServer() {
 watch(serverId, () => {
   serverMissingHandled.value = false
   loadServer()
-  loadTshockSecurity()
   loadMods()
   loadSaves()
   setupStatusPoll()
@@ -294,22 +223,6 @@ async function loadSaves() {
     notification.error('加载存档失败', '')
   } finally {
     savesLoading.value = false
-  }
-}
-
-async function loadTshockSecurity() {
-  if (!authStore.isOperator) {
-    return
-  }
-
-  securityLoading.value = true
-  try {
-    const response = await serverApi.getTshockSecurity(serverId.value)
-    tshockSecurity.value = response.data
-  } catch (error: any) {
-    notification.error('加载 TShock 权限信息失败', error?.response?.data?.error || '')
-  } finally {
-    securityLoading.value = false
   }
 }
 
@@ -471,7 +384,6 @@ async function handleBackup() {
 onMounted(() => {
   serverMissingHandled.value = false
   loadServer()
-  loadTshockSecurity()
   loadMods()
   loadSaves()
   setupStatusPoll()
@@ -520,8 +432,7 @@ onUnmounted(() => {
 }
 
 .mods-section,
-.saves-section,
-.security-section {
+.saves-section {
   background-color: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 12px;
@@ -546,70 +457,6 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
   gap: 16px;
-}
-
-.security-summary {
-  margin-bottom: 16px;
-}
-
-.summary-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 6px;
-}
-
-.summary-line:last-child {
-  margin-bottom: 0;
-}
-
-.security-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 16px;
-}
-
-.security-card {
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  padding: 16px;
-  background: var(--bg-body);
-}
-
-.security-card h4 {
-  margin: 0 0 12px 0;
-  color: var(--text-primary);
-}
-
-.security-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.security-item {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-}
-
-.item-main {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.item-tags {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-items: flex-start;
-  gap: 6px;
 }
 
 .muted,
