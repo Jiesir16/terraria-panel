@@ -3,6 +3,7 @@ pub mod mod_manager;
 pub mod process_manager;
 pub mod save_manager;
 pub mod system_monitor;
+pub mod tshock_rest;
 pub mod version_manager;
 
 pub use command_policy::can_execute_command;

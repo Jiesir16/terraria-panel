@@ -219,6 +219,136 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/servers/:id/ssc-characters/:account_id",
             get(handlers::tshock::export_ssc_character),
         )
+        // TShock REST API proxy endpoints
+        .route(
+            "/api/servers/:id/rest/server/status",
+            get(handlers::tshock_rest::rest_server_status),
+        )
+        .route(
+            "/api/servers/:id/rest/server/broadcast",
+            post(handlers::tshock_rest::rest_server_broadcast),
+        )
+        .route(
+            "/api/servers/:id/rest/server/reload",
+            post(handlers::tshock_rest::rest_server_reload),
+        )
+        .route(
+            "/api/servers/:id/rest/server/rawcmd",
+            post(handlers::tshock_rest::rest_server_rawcmd),
+        )
+        .route(
+            "/api/servers/:id/rest/server/off",
+            post(handlers::tshock_rest::rest_server_off),
+        )
+        .route(
+            "/api/servers/:id/rest/server/motd",
+            get(handlers::tshock_rest::rest_server_motd),
+        )
+        .route(
+            "/api/servers/:id/rest/server/rules",
+            get(handlers::tshock_rest::rest_server_rules),
+        )
+        // REST: Players
+        .route(
+            "/api/servers/:id/rest/players/list",
+            get(handlers::tshock_rest::rest_player_list),
+        )
+        .route(
+            "/api/servers/:id/rest/players/:player",
+            get(handlers::tshock_rest::rest_player_read),
+        )
+        .route(
+            "/api/servers/:id/rest/players/kick",
+            post(handlers::tshock_rest::rest_player_kick),
+        )
+        .route(
+            "/api/servers/:id/rest/players/kill",
+            post(handlers::tshock_rest::rest_player_kill),
+        )
+        .route(
+            "/api/servers/:id/rest/players/mute",
+            post(handlers::tshock_rest::rest_player_mute),
+        )
+        .route(
+            "/api/servers/:id/rest/players/unmute",
+            post(handlers::tshock_rest::rest_player_unmute),
+        )
+        // REST: Users
+        .route(
+            "/api/servers/:id/rest/users/list",
+            get(handlers::tshock_rest::rest_user_list),
+        )
+        .route(
+            "/api/servers/:id/rest/users/activelist",
+            get(handlers::tshock_rest::rest_user_active_list),
+        )
+        .route(
+            "/api/servers/:id/rest/users/:user",
+            get(handlers::tshock_rest::rest_user_read)
+                .delete(handlers::tshock_rest::rest_user_destroy),
+        )
+        .route(
+            "/api/servers/:id/rest/users/create",
+            post(handlers::tshock_rest::rest_user_create),
+        )
+        .route(
+            "/api/servers/:id/rest/users/update",
+            post(handlers::tshock_rest::rest_user_update),
+        )
+        // REST: Groups
+        .route(
+            "/api/servers/:id/rest/groups/list",
+            get(handlers::tshock_rest::rest_group_list),
+        )
+        .route(
+            "/api/servers/:id/rest/groups/:name",
+            get(handlers::tshock_rest::rest_group_read)
+                .put(handlers::tshock_rest::rest_group_update)
+                .delete(handlers::tshock_rest::rest_group_destroy),
+        )
+        .route(
+            "/api/servers/:id/rest/groups/create",
+            post(handlers::tshock_rest::rest_group_create),
+        )
+        // REST: Bans
+        .route(
+            "/api/servers/:id/rest/bans/list",
+            get(handlers::tshock_rest::rest_ban_list),
+        )
+        .route(
+            "/api/servers/:id/rest/bans/:ticket",
+            get(handlers::tshock_rest::rest_ban_read)
+                .delete(handlers::tshock_rest::rest_ban_destroy),
+        )
+        .route(
+            "/api/servers/:id/rest/bans/create",
+            post(handlers::tshock_rest::rest_ban_create),
+        )
+        // REST: World
+        .route(
+            "/api/servers/:id/rest/world/read",
+            get(handlers::tshock_rest::rest_world_read),
+        )
+        .route(
+            "/api/servers/:id/rest/world/save",
+            post(handlers::tshock_rest::rest_world_save),
+        )
+        .route(
+            "/api/servers/:id/rest/world/butcher",
+            post(handlers::tshock_rest::rest_world_butcher),
+        )
+        .route(
+            "/api/servers/:id/rest/world/bloodmoon",
+            post(handlers::tshock_rest::rest_world_bloodmoon),
+        )
+        .route(
+            "/api/servers/:id/rest/world/meteor",
+            post(handlers::tshock_rest::rest_world_meteor),
+        )
+        .route(
+            "/api/servers/:id/rest/world/autosave",
+            post(handlers::tshock_rest::rest_world_autosave),
+        )
         // Config endpoints
         .route(
             "/api/servers/:id/config",

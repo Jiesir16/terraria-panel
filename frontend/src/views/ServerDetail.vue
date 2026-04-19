@@ -48,6 +48,10 @@
           <TShockManager :server-id="serverId" ref="tshockManagerRef" />
         </n-tab-pane>
 
+        <n-tab-pane v-if="authStore.isOperator" name="rest" tab="实时管理">
+          <TShockRestPanel :server-id="serverId" ref="tshockRestRef" />
+        </n-tab-pane>
+
         <n-tab-pane name="mods" tab="Mod管理">
           <div class="mods-section">
             <div class="section-header">
@@ -118,6 +122,7 @@ import ServerConsole from '../components/server/ServerConsole.vue'
 import ServerConfigForm from '../components/server/ServerConfigForm.vue'
 import ServerStatusBadge from '../components/server/ServerStatusBadge.vue'
 import TShockManager from '../components/server/TShockManager.vue'
+import TShockRestPanel from '../components/server/TShockRestPanel.vue'
 import ModCard from '../components/mod/ModCard.vue'
 import ModUploadModal from '../components/mod/ModUploadModal.vue'
 import SaveCard from '../components/save/SaveCard.vue'
@@ -137,6 +142,7 @@ const showModUpload = ref(false)
 const mods = ref<any[]>([])
 const saves = ref<any[]>([])
 const tshockManagerRef = ref<InstanceType<typeof TShockManager> | null>(null)
+const tshockRestRef = ref<InstanceType<typeof TShockRestPanel> | null>(null)
 let statusPollTimer: ReturnType<typeof setInterval> | null = null
 const serverMissingHandled = ref(false)
 
