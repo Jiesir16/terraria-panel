@@ -46,6 +46,18 @@ export interface TShockBan {
   expiration: string
 }
 
+export interface TerrariaItem {
+  id: number
+  name: string
+  internal_name: string
+}
+
+export interface TerrariaItemListResponse {
+  version: string
+  source: string
+  items: TerrariaItem[]
+}
+
 // ─── API methods ───
 
 const base = (serverId: string) => `/servers/${serverId}/rest`
@@ -75,6 +87,15 @@ export const tshockRestApi = {
 
   serverOff: (serverId: string, message?: string, nosave = false) =>
     api.post(`${base(serverId)}/server/off`, { message, nosave }),
+
+  itemList: (serverId: string, q?: string, limit = 10000) =>
+    api.get<TerrariaItemListResponse>(`${base(serverId)}/items`, { params: { q, limit } }),
+
+  itemSync: (serverId: string) =>
+    api.post<TerrariaItemListResponse>(`${base(serverId)}/items/sync`),
+
+  itemGive: (serverId: string, data: { player: string; item_id?: number; item_name?: string; stack?: number }) =>
+    api.post(`${base(serverId)}/items/give`, data),
 
   serverMotd: (serverId: string) =>
     api.get(`${base(serverId)}/server/motd`),

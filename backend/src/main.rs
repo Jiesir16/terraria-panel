@@ -125,6 +125,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(handlers::server::list_worlds),
         )
         .route(
+            "/api/servers/:id/items",
+            get(handlers::tshock_rest::rest_item_list),
+        )
+        .route(
+            "/api/servers/:id/items/sync",
+            post(handlers::tshock_rest::rest_item_sync),
+        )
+        .route(
             "/api/servers/:id/tshock-security",
             get(handlers::server::tshock_security_overview),
         )
@@ -243,6 +251,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/servers/:id/rest/server/off",
             post(handlers::tshock_rest::rest_server_off),
+        )
+        .route(
+            "/api/servers/:id/rest/items",
+            get(handlers::tshock_rest::rest_item_list),
+        )
+        .route(
+            "/api/servers/:id/rest/items/sync",
+            post(handlers::tshock_rest::rest_item_sync),
+        )
+        .route(
+            "/api/servers/:id/rest/items/give",
+            post(handlers::tshock_rest::rest_item_give),
         )
         .route(
             "/api/servers/:id/rest/server/motd",

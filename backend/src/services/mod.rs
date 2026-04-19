@@ -1,4 +1,5 @@
 pub mod command_policy;
+pub mod item_catalog;
 pub mod mod_manager;
 pub mod process_manager;
 pub mod save_manager;

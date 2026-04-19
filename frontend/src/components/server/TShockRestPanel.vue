@@ -91,6 +91,57 @@
         </n-spin>
       </n-tab-pane>
 
+      <!-- ─── Item Give ─── -->
+      <n-tab-pane name="items" tab="物品发放">
+        <div class="command-section">
+          <h4>发放物品</h4>
+          <p class="hint-text">物品 ID 清单按当前服务器 TShock 版本缓存；缓存不存在时会自动从 wiki.gg 下载。</p>
+          <div class="item-form">
+            <n-select
+              v-model:value="givePlayer"
+              :options="playerOptions"
+              filterable
+              tag
+              clearable
+              placeholder="选择在线玩家，或输入玩家名"
+            />
+            <n-select
+              v-model:value="selectedItemId"
+              :options="itemOptions"
+              filterable
+              clearable
+              placeholder="选择物品"
+              :loading="itemsLoading"
+            />
+            <n-input-number v-model:value="giveStack" :min="1" :max="9999" placeholder="数量" />
+            <n-button type="primary" @click="handleGiveItem" :loading="itemGiveLoading" :disabled="!canGiveItem">
+              发放
+            </n-button>
+          </div>
+        </div>
+
+        <div class="sub-section-header" style="margin-top: 18px;">
+          <n-input v-model:value="itemQuery" placeholder="搜索物品 ID / 名称 / 内部名" clearable @keyup.enter="loadItems" />
+          <n-button size="small" @click="loadItems" :loading="itemsLoading">搜索/刷新</n-button>
+          <n-button size="small" type="warning" @click="syncItems" :loading="itemSyncLoading">重新下载物品清单</n-button>
+        </div>
+        <div class="hint-text" v-if="itemCatalogVersion">
+          当前清单：{{ itemCatalogVersion }} · {{ itemCatalogSource }} · 已显示 {{ items.length }} 条
+        </div>
+        <n-spin :show="itemsLoading">
+          <div v-if="items.length === 0" class="empty-note">暂无物品清单，点击“搜索/刷新”或“重新下载物品清单”。</div>
+          <n-data-table
+            v-else
+            :columns="itemColumns"
+            :data="items"
+            :row-key="(row: any) => row.id"
+            :pagination="{ pageSize: 20 }"
+            size="small"
+            striped
+          />
+        </n-spin>
+      </n-tab-pane>
+
       <!-- ─── Bans ─── -->
       <n-tab-pane name="bans" tab="封禁管理">
         <div class="sub-section-header">
@@ -218,14 +269,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, h, onMounted, reactive } from 'vue'
+import { ref, h, onMounted, reactive, computed, watch } from 'vue'
 import {
   NTabs, NTabPane, NButton, NSpin, NDataTable, NTag, NAlert, NCard,
-  NInput, NModal, NForm, NFormItem, useDialog
+  NInput, NModal, NForm, NFormItem, NSelect, NInputNumber, useDialog
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import { tshockRestApi } from '../../api/tshockRest'
-import type { TShockRestPlayer, TShockServerStatus, TShockWorldInfo } from '../../api/tshockRest'
+import type { TerrariaItem, TShockRestPlayer, TShockServerStatus, TShockWorldInfo } from '../../api/tshockRest'
 import { useNotification } from '../../composables/useNotification'
 import { useServersStore } from '../../stores/servers'
 
@@ -256,6 +307,18 @@ const rulesText = ref('')
 // Players
 const playersLoading = ref(false)
 const players = ref<TShockRestPlayer[]>([])
+
+// Items
+const itemsLoading = ref(false)
+const itemSyncLoading = ref(false)
+const itemGiveLoading = ref(false)
+const itemQuery = ref('')
+const items = ref<TerrariaItem[]>([])
+const itemCatalogVersion = ref('')
+const itemCatalogSource = ref('')
+const selectedItemId = ref<number | null>(null)
+const givePlayer = ref('')
+const giveStack = ref(1)
 
 // Bans
 const bansLoading = ref(false)
@@ -313,6 +376,42 @@ const playerColumns: DataTableColumns = [
         h(NButton, { size: 'tiny', onClick: () => handleMute(row.nickname) }, { default: () => '禁言' }),
         h(NButton, { size: 'tiny', onClick: () => handleUnmute(row.nickname) }, { default: () => '解禁' }),
       ])
+    }
+  },
+]
+
+const playerOptions = computed(() => players.value
+  .filter((player: any) => player.nickname)
+  .map((player: any) => ({ label: player.nickname, value: player.nickname }))
+)
+
+const itemOptions = computed(() => items.value.map((item) => ({
+  label: `#${item.id} ${item.name} (${item.internal_name})`,
+  value: item.id,
+})))
+
+const selectedItem = computed(() => items.value.find((item) => item.id === selectedItemId.value) || null)
+
+const canGiveItem = computed(() => {
+  return !!givePlayer.value.trim() && !!selectedItemId.value && giveStack.value >= 1
+})
+
+const itemColumns: DataTableColumns = [
+  { title: 'ID', key: 'id', width: 80 },
+  { title: '名称', key: 'name', width: 180 },
+  { title: '内部名', key: 'internal_name', width: 220 },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 90,
+    render: (row: any) => {
+      return h(NButton, {
+        size: 'tiny',
+        type: selectedItemId.value === row.id ? 'primary' : 'default',
+        onClick: () => {
+          selectedItemId.value = row.id
+        }
+      }, { default: () => selectedItemId.value === row.id ? '已选择' : '选择' })
     }
   },
 ]
@@ -394,6 +493,35 @@ async function loadPlayers() {
     notification.error('获取玩家列表失败', e?.response?.data?.error || '')
   } finally {
     playersLoading.value = false
+  }
+}
+
+async function loadItems() {
+  itemsLoading.value = true
+  try {
+    const resp = await tshockRestApi.itemList(props.serverId, itemQuery.value || undefined, 10000)
+    items.value = resp.data.items || []
+    itemCatalogVersion.value = resp.data.version || ''
+    itemCatalogSource.value = resp.data.source || ''
+  } catch (e: any) {
+    notification.error('获取物品清单失败', e?.response?.data?.error || '')
+  } finally {
+    itemsLoading.value = false
+  }
+}
+
+async function syncItems() {
+  itemSyncLoading.value = true
+  try {
+    const resp = await tshockRestApi.itemSync(props.serverId)
+    items.value = resp.data.items || []
+    itemCatalogVersion.value = resp.data.version || ''
+    itemCatalogSource.value = resp.data.source || ''
+    notification.success('物品清单已更新', `共 ${items.value.length} 条`)
+  } catch (e: any) {
+    notification.error('下载物品清单失败', e?.response?.data?.error || '')
+  } finally {
+    itemSyncLoading.value = false
   }
 }
 
@@ -523,6 +651,35 @@ async function handleUnmute(player: string) {
   } catch (e: any) {
     notification.error('解禁失败', e?.response?.data?.error || '')
   }
+}
+
+function handleGiveItem() {
+  if (!canGiveItem.value || !selectedItem.value) return
+  const player = givePlayer.value.trim()
+  const item = selectedItem.value
+  const stack = giveStack.value || 1
+
+  dialog.warning({
+    title: '确认发放物品',
+    content: `确定给「${player}」发放 ${stack} 个 #${item.id} ${item.name} 吗？`,
+    positiveText: '发放',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      itemGiveLoading.value = true
+      try {
+        await tshockRestApi.itemGive(props.serverId, {
+          player,
+          item_id: item.id,
+          stack,
+        })
+        notification.success('物品已发放', `${player} <- ${stack} x ${item.name}`)
+      } catch (e: any) {
+        notification.error('发放失败', e?.response?.data?.error || '')
+      } finally {
+        itemGiveLoading.value = false
+      }
+    }
+  })
 }
 
 // ─── Ban actions ───
@@ -686,6 +843,12 @@ onMounted(async () => {
   refreshAll()
 })
 
+watch(activeTab, (tab) => {
+  if (tab === 'items' && items.value.length === 0 && !itemsLoading.value) {
+    loadItems()
+  }
+})
+
 defineExpose({ refreshAll })
 </script>
 
@@ -769,6 +932,13 @@ defineExpose({ refreshAll })
   gap: 8px;
 }
 
+.item-form {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(260px, 2fr) 120px auto;
+  gap: 8px;
+  align-items: center;
+}
+
 .pre-block {
   margin: 0;
   white-space: pre-wrap;
@@ -783,5 +953,11 @@ defineExpose({ refreshAll })
   font-size: 13px;
   padding: 20px;
   text-align: center;
+}
+
+@media (max-width: 900px) {
+  .item-form {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

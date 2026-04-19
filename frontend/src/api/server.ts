@@ -148,6 +148,18 @@ export interface TShockSscCharacter extends TShockSscCharacterSummary {
   hide_visuals?: string
 }
 
+export interface TerrariaItem {
+  id: number
+  name: string
+  internal_name: string
+}
+
+export interface TerrariaItemListResponse {
+  version: string
+  source: string
+  items: TerrariaItem[]
+}
+
 export const serverApi = {
   getList: () =>
     api.get<ServerStatus[]>('/servers'),
@@ -210,6 +222,12 @@ export const serverApi = {
 
   listWorlds: (id: string) =>
     api.get<WorldFile[]>(`/servers/${id}/worlds`),
+
+  getItemCatalog: (id: string, q?: string, limit = 10000) =>
+    api.get<TerrariaItemListResponse>(`/servers/${id}/items`, { params: { q, limit } }),
+
+  syncItemCatalog: (id: string) =>
+    api.post<TerrariaItemListResponse>(`/servers/${id}/items/sync`),
 
   // TShock user management
   updateTshockUserGroup: (id: string, username: string, group: string) =>
