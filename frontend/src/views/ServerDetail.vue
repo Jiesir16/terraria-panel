@@ -37,19 +37,19 @@
     <n-spin :show="loading">
       <n-tabs type="line">
         <n-tab-pane name="console" tab="控制台">
-          <server-console :server-id="serverId" />
+          <server-console :key="serverId" :server-id="serverId" />
         </n-tab-pane>
 
         <n-tab-pane name="config" tab="配置">
-          <server-config-form :server-id="serverId" />
+          <server-config-form :key="serverId" :server-id="serverId" />
         </n-tab-pane>
 
         <n-tab-pane v-if="authStore.isOperator" name="security" tab="TShock权限">
-          <TShockManager :server-id="serverId" ref="tshockManagerRef" />
+          <TShockManager :key="serverId" :server-id="serverId" ref="tshockManagerRef" />
         </n-tab-pane>
 
         <n-tab-pane v-if="authStore.isOperator" name="rest" tab="实时管理">
-          <TShockRestPanel :server-id="serverId" ref="tshockRestRef" />
+          <TShockRestPanel :key="serverId" :server-id="serverId" ref="tshockRestRef" />
         </n-tab-pane>
 
         <n-tab-pane name="mods" tab="Mod管理">
@@ -73,6 +73,7 @@
               </div>
             </n-spin>
             <mod-upload-modal
+              :key="serverId"
               v-model:show="showModUpload"
               :server-id="serverId"
               @uploaded="loadMods"
@@ -242,17 +243,21 @@ function handleStart() {
     content: `确定要启动服务器「${currentServer.value?.name || serverId.value}」吗？`,
     positiveText: '启动',
     negativeText: '取消',
-    onPositiveClick: async () => {
-      startLoading.value = true
-      try {
-        const result = await serversStore.startServer(serverId.value)
-        notification.success('启动请求已发送', result?.message || '服务器正在启动中...')
-        await loadServer()
-      } catch (error: any) {
-        notification.error('启动失败', error?.response?.data?.error || '请检查服务器配置和日志')
-      } finally {
-        startLoading.value = false
-      }
+    onPositiveClick: () => {
+      ;(async () => {
+        startLoading.value = true
+        loading.value = true
+        try {
+          const result = await serversStore.startServer(serverId.value)
+          notification.success('启动请求已发送', result?.message || '服务器正在启动中...')
+          await loadServer()
+        } catch (error: any) {
+          notification.error('启动失败', error?.response?.data?.error || '请检查服务器配置和日志')
+        } finally {
+          startLoading.value = false
+          loading.value = false
+        }
+      })()
     }
   })
 }
@@ -263,17 +268,21 @@ function handleStop() {
     content: `确定要停止服务器「${currentServer.value?.name || serverId.value}」吗？正在游戏中的玩家将被断开连接。`,
     positiveText: '停止',
     negativeText: '取消',
-    onPositiveClick: async () => {
-      stopLoading.value = true
-      try {
-        await serversStore.stopServer(serverId.value)
-        notification.success('服务器已停止', '服务器已安全关闭')
-        await loadServer()
-      } catch (error: any) {
-        notification.error('停止失败', error?.response?.data?.error || '')
-      } finally {
-        stopLoading.value = false
-      }
+    onPositiveClick: () => {
+      ;(async () => {
+        stopLoading.value = true
+        loading.value = true
+        try {
+          await serversStore.stopServer(serverId.value)
+          notification.success('服务器已停止', '服务器已安全关闭')
+          await loadServer()
+        } catch (error: any) {
+          notification.error('停止失败', error?.response?.data?.error || '')
+        } finally {
+          stopLoading.value = false
+          loading.value = false
+        }
+      })()
     }
   })
 }
@@ -284,17 +293,21 @@ function handleKill() {
     content: `确定要强制结束服务器「${currentServer.value?.name || serverId.value}」吗？这可能导致未保存的数据丢失！建议先尝试正常停止。`,
     positiveText: '强制结束',
     negativeText: '取消',
-    onPositiveClick: async () => {
-      killLoading.value = true
-      try {
-        const result = await serversStore.killServer(serverId.value)
-        notification.success('强制结束信号已发送', result?.message || '进程已被终止')
-        await loadServer()
-      } catch (error: any) {
-        notification.error('强制结束失败', error?.response?.data?.error || '')
-      } finally {
-        killLoading.value = false
-      }
+    onPositiveClick: () => {
+      ;(async () => {
+        killLoading.value = true
+        loading.value = true
+        try {
+          const result = await serversStore.killServer(serverId.value)
+          notification.success('强制结束信号已发送', result?.message || '进程已被终止')
+          await loadServer()
+        } catch (error: any) {
+          notification.error('强制结束失败', error?.response?.data?.error || '')
+        } finally {
+          killLoading.value = false
+          loading.value = false
+        }
+      })()
     }
   })
 }
@@ -305,17 +318,21 @@ function handleRestart() {
     content: `确定要重启服务器「${currentServer.value?.name || serverId.value}」吗？正在游戏中的玩家将被短暂断开。`,
     positiveText: '重启',
     negativeText: '取消',
-    onPositiveClick: async () => {
-      restartLoading.value = true
-      try {
-        await serversStore.restartServer(serverId.value)
-        notification.success('服务器已重启', '服务器正在重新启动中...')
-        await loadServer()
-      } catch (error: any) {
-        notification.error('重启失败', error?.response?.data?.error || '')
-      } finally {
-        restartLoading.value = false
-      }
+    onPositiveClick: () => {
+      ;(async () => {
+        restartLoading.value = true
+        loading.value = true
+        try {
+          await serversStore.restartServer(serverId.value)
+          notification.success('服务器已重启', '服务器正在重新启动中...')
+          await loadServer()
+        } catch (error: any) {
+          notification.error('重启失败', error?.response?.data?.error || '')
+        } finally {
+          restartLoading.value = false
+          loading.value = false
+        }
+      })()
     }
   })
 }

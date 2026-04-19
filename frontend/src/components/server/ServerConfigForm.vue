@@ -6,6 +6,7 @@
         <n-divider title-placement="left" style="margin-top: 0;">
           基本设置
         </n-divider>
+        <div class="form-section">
 
         <n-form-item label="服务器名称" path="server_name">
           <n-input v-model:value="formData.server_name" placeholder="服务器名称" />
@@ -31,10 +32,12 @@
           <n-input v-model:value="formData.server_full_no_reserve_reason" placeholder="服务器已满时显示的消息" />
         </n-form-item>
 
+        </div>
         <!-- 世界设置 -->
         <n-divider title-placement="left">
           世界设置
         </n-divider>
+        <div class="form-section">
 
         <n-form-item label="选择存档" path="world_file">
           <div style="display: flex; gap: 8px; width: 100%;">
@@ -78,18 +81,13 @@
           />
         </n-form-item>
 
-        <n-grid :cols="2" :x-gap="12">
-          <n-grid-item>
-            <n-form-item label="宽度" path="world_width" label-placement="left">
-              <n-input-number v-model:value="formData.world_width" :min="400" :max="16800" :disabled="usingExistingWorld" style="width: 100%;" />
-            </n-form-item>
-          </n-grid-item>
-          <n-grid-item>
-            <n-form-item label="高度" path="world_height" label-placement="left">
-              <n-input-number v-model:value="formData.world_height" :min="400" :max="4800" :disabled="usingExistingWorld" style="width: 100%;" />
-            </n-form-item>
-          </n-grid-item>
-        </n-grid>
+        <n-form-item label="宽度" path="world_width">
+          <n-input-number v-model:value="formData.world_width" :min="400" :max="16800" :disabled="usingExistingWorld" style="width: 100%;" />
+        </n-form-item>
+
+        <n-form-item label="高度" path="world_height">
+          <n-input-number v-model:value="formData.world_height" :min="400" :max="4800" :disabled="usingExistingWorld" style="width: 100%;" />
+        </n-form-item>
 
         <n-form-item label="游戏难度" path="difficulty">
           <n-select
@@ -104,10 +102,12 @@
           <n-input v-model:value="formData.seed" :disabled="usingExistingWorld" placeholder="留空则随机生成" />
         </n-form-item>
 
+        </div>
         <!-- 游戏规则 -->
         <n-divider title-placement="left">
           游戏规则
         </n-divider>
+        <div class="form-section">
 
         <n-form-item label="白名单" path="enable_whitelist">
           <div>
@@ -166,10 +166,12 @@
           <n-checkbox v-model:checked="formData.disable_dungeon_guardian">禁止地牢守卫生成</n-checkbox>
         </n-form-item>
 
+        </div>
         <!-- 权限与安全 -->
         <n-divider title-placement="left">
           权限与安全
         </n-divider>
+        <div class="form-section">
 
         <n-form-item label="服务端存档 (SSC)" path="server_side_character">
           <div class="ssc-config-row">
@@ -196,10 +198,12 @@
           <n-checkbox v-model:checked="formData.disable_invisible_pvp">禁止使用隐身药水进行 PvP</n-checkbox>
         </n-form-item>
 
+        </div>
         <!-- 反作弊 -->
         <n-divider title-placement="left">
           反作弊
         </n-divider>
+        <div class="form-section">
 
         <n-form-item label="反作弊" path="anti_cheat">
           <n-checkbox v-model:checked="formData.anti_cheat">启用反作弊检测</n-checkbox>
@@ -226,10 +230,12 @@
           <n-checkbox v-model:checked="formData.disable_player_count_reporting">不向外部查询报告在线人数</n-checkbox>
         </n-form-item>
 
+        </div>
         <!-- REST API -->
         <n-divider title-placement="left">
           REST API
         </n-divider>
+        <div class="form-section">
 
         <n-form-item label="REST API" path="rest_api_enabled">
           <div>
@@ -241,6 +247,7 @@
         <n-form-item v-if="formData.rest_api_enabled" label="REST API 端口" path="rest_api_port">
           <n-input-number v-model:value="formData.rest_api_port" :min="1024" :max="65535" style="width: 100%;" />
         </n-form-item>
+        </div>
 
         <div class="form-actions">
           <n-button v-if="authStore.isOperator" type="primary" :loading="saving" @click="handleSave">
@@ -521,7 +528,19 @@ onMounted(() => {
 }
 
 :deep(.n-form) {
-  max-width: 620px;
+  max-width: 1000px;
+}
+
+.form-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 32px;
+}
+
+@media (max-width: 768px) {
+  .form-section {
+    grid-template-columns: 1fr;
+  }
 }
 
 :deep(.n-form-item) {
