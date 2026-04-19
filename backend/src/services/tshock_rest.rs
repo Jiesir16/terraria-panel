@@ -303,7 +303,7 @@ fn provision_token_in_config(config_path: &Path, config: &mut Value) -> Result<S
 
 /// Check whether the REST API is set up and functional. Returns `(ready, message)`.
 /// If not ready, auto-provisions a token and returns `needs_restart = true`.
-pub fn ensure_rest_setup(data_dir: &Path, server_id: &str) -> Result<(bool, String), AppError> {
+pub fn ensure_rest_setup(data_dir: &Path, server_id: &str) -> Result<(bool, String, String), AppError> {
     let config_dir = data_dir
         .join("servers")
         .join(server_id)
@@ -332,7 +332,7 @@ pub fn ensure_rest_setup(data_dir: &Path, server_id: &str) -> Result<(bool, Stri
     if rest_enabled && rest_port_ok && has_clean_token {
         let token = read_application_token(&config_dir)?;
         cache_token(&config_dir.join("panel-rest-token.txt"), &token);
-        return Ok((true, "REST API is configured and ready.".to_string()));
+        return Ok((true, "REST API is configured and ready.".to_string(), token));
     }
 
     let token = read_application_token(&config_dir)?;
@@ -342,6 +342,7 @@ pub fn ensure_rest_setup(data_dir: &Path, server_id: &str) -> Result<(bool, Stri
         false,
         "REST API token has been provisioned. Please restart the server for changes to take effect."
             .to_string(),
+        token,
     ))
 }
 

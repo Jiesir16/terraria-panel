@@ -21,6 +21,10 @@
 
     <div class="rest-cards">
       <n-card title="REST API 状态" class="rest-card">
+        <div v-if="restToken" style="margin-bottom: 12px;">
+          <span style="font-size: 13px; color: var(--text-muted); display: block; margin-bottom: 4px;">当前使用的 REST API Token (只读)：</span>
+          <n-input v-model:value="restToken" readonly placeholder="Token 正在加载..." />
+        </div>
         <div class="world-actions compact">
           <n-button size="small" @click="handleTokenTest" :loading="tokenTestLoading">测试 Token</n-button>
           <n-button size="small" type="warning" @click="handleRestRestart" :loading="actionLoading.restRestart">
@@ -309,6 +313,7 @@ const serversStore = useServersStore()
 // ─── State ───
 
 const restError = ref('')
+const restToken = ref('')
 const needsRestart = ref(false)
 const setupMessage = ref('')
 const restartingForRest = ref(false)
@@ -617,6 +622,9 @@ async function checkRestSetup() {
   try {
     const resp = await tshockRestApi.setup(props.serverId)
     const data = resp.data as any
+    if (data.token) {
+      restToken.value = data.token
+    }
     if (!data.ready) {
       needsRestart.value = true
       setupMessage.value = data.message || 'REST API Token 已写入配置，需要重启服务器使其生效。'

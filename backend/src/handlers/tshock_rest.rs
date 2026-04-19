@@ -158,12 +158,20 @@ pub async fn rest_setup(
     _auth: Auth,
 ) -> Result<Json<Value>, AppError> {
     let result = tshock_rest::ensure_rest_setup(&state.config.server.data_dir, &id);
-    match &result {
-        Ok((_, message)) => log_rest_operation(&state, &id, "REST 自动配置", message),
-        Err(error) => log_rest_error(&state, &id, "REST 自动配置", error),
+    match result {
+        Ok((ready, message, token)) => {
+            log_rest_operation(&state, &id, "REST 自动配置", &message);
+            Ok(Json(json!({
+                "ready": ready,
+                "message": message,
+                "token": token
+            })))
+        }
+        Err(error) => {
+            log_rest_error(&state, &id, "REST 自动配置", &error);
+            Err(error)
+        }
     }
-    let (ready, message) = result?;
-    Ok(Json(json!({ "ready": ready, "message": message })))
 }
 
 // ─── Server endpoints ───
