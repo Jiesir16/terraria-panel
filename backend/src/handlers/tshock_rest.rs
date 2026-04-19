@@ -58,6 +58,33 @@ fn quote_tshock_arg(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\\\""))
 }
 
+fn tshock_response_text(value: &Value) -> String {
+    if let Some(response) = value.get("response") {
+        if let Some(text) = response.as_str() {
+            return text.to_string();
+        }
+        if let Some(lines) = response.as_array() {
+            return lines
+                .iter()
+                .filter_map(|line| line.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+    }
+    value.to_string()
+}
+
+fn rawcmd_response_indicates_failure(value: &Value) -> bool {
+    let text = tshock_response_text(value).to_ascii_lowercase();
+    text.contains("invalid command")
+        || text.contains("invalid syntax")
+        || text.contains("not have permission")
+        || text.contains("you do not have access")
+        || text.contains("could not find")
+        || text.contains("failed")
+        || text.contains("error")
+}
+
 // ─── REST Setup ───
 
 /// Check / auto-provision REST API token for a server.
@@ -225,9 +252,10 @@ pub async fn rest_item_give(
     };
 
     let stack = body.stack.unwrap_or(1).clamp(1, 9999);
-    let cmd = format!("give {} {} {}", item_arg, quote_tshock_arg(player), stack);
+    let cmd = format!("/give {} {} {}", item_arg, quote_tshock_arg(player), stack);
     let client = client_for(&state, &id)?;
     let data = client.server_rawcmd(&cmd).await?;
+    let ok = !rawcmd_response_indicates_failure(&data);
     crate::db::log_operation(
         &state.db,
         &auth.user_id,
@@ -237,7 +265,9 @@ pub async fn rest_item_give(
     );
 
     Ok(Json(json!({
+        "ok": ok,
         "command": cmd,
+        "message": tshock_response_text(&data),
         "response": data,
     })))
 }

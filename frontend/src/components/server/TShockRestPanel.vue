@@ -411,6 +411,32 @@ function itemDisplayName(item: TerrariaItem) {
   return item.zh_name ? `${item.zh_name} / ${item.name}` : item.name
 }
 
+function restResponseText(data: any): string {
+  const response = data?.response?.response ?? data?.response ?? data?.message ?? data?.error
+  if (Array.isArray(response)) {
+    return response.join('\n')
+  }
+  if (typeof response === 'string') {
+    return response
+  }
+  if (response) {
+    return JSON.stringify(response, null, 2)
+  }
+  return ''
+}
+
+function restBusinessFailed(data: any): boolean {
+  if (data?.ok === false) return true
+  const text = restResponseText(data).toLowerCase()
+  return text.includes('invalid command')
+    || text.includes('invalid syntax')
+    || text.includes('not have permission')
+    || text.includes('you do not have access')
+    || text.includes('could not find')
+    || text.includes('failed')
+    || text.includes('error')
+}
+
 const itemOptions = computed(() => items.value.map((item) => ({
   label: `#${item.id} ${itemDisplayName(item)} (${item.internal_name})`,
   value: item.id,
@@ -757,11 +783,17 @@ function handleGiveItem() {
           item_id: item.id,
           stack,
         })
+        const message = restResponseText(resp.data)
         itemGiveResult.value = JSON.stringify(resp.data, null, 2)
-        notification.success('物品已发放', `${player} <- ${stack} x ${itemDisplayName(item)}`)
+        if (restBusinessFailed(resp.data)) {
+          notification.error('发放失败', message || 'TShock 返回失败')
+          return
+        }
+        notification.success('物品已发放', message || `${player} <- ${stack} x ${itemDisplayName(item)}`)
       } catch (e: any) {
-        itemGiveResult.value = e?.response?.data ? JSON.stringify(e.response.data, null, 2) : ''
-        notification.error('发放失败', e?.response?.data?.error || '')
+        const data = e?.response?.data
+        itemGiveResult.value = data ? JSON.stringify(data, null, 2) : ''
+        notification.error('请求失败', data?.error || e?.message || '')
       } finally {
         itemGiveLoading.value = false
       }
@@ -914,10 +946,14 @@ async function handleRawcmd() {
   try {
     const resp = await tshockRestApi.serverRawcmd(props.serverId, rawCmd.value)
     const data = resp.data as any
-    rawCmdResult.value = data?.response || JSON.stringify(data, null, 2)
+    rawCmdResult.value = restResponseText(data) || JSON.stringify(data, null, 2)
+    if (restBusinessFailed(data)) {
+      notification.error('命令执行失败', rawCmdResult.value)
+      return
+    }
     rawCmd.value = ''
   } catch (e: any) {
-    notification.error('命令执行失败', e?.response?.data?.error || '')
+    notification.error('请求失败', e?.response?.data?.error || e?.message || '')
   } finally {
     actionLoading.rawcmd = false
   }
