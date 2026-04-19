@@ -154,7 +154,8 @@
         <div class="perm-stats">
           <n-tag size="small" type="success">已选 {{ checkedPermKeys.length }} 项</n-tag>
           <n-tag size="small">共 {{ allLeafCount }} 项可选</n-tag>
-          <span v-if="authStore.isAdmin" class="muted" style="margin-left: 8px;">勾选后立即保存</span>
+          <n-tag v-if="permissionDirty" size="small" type="warning">有未保存修改</n-tag>
+          <span v-if="authStore.isAdmin" class="muted" style="margin-left: 8px;">勾选后先暂存，点击保存后生效</span>
           <span v-if="extraPerms.length > 0" class="muted" style="margin-left: 8px;">
             + {{ extraPerms.length }} 项自定义/插件权限
           </span>
@@ -191,7 +192,7 @@
               :key="perm"
               size="small"
               :closable="authStore.isAdmin"
-              @close="handleRemoveExtraPerm(perm)"
+              @close="handleRemoveExtraPermLocal(perm)"
             >
               {{ perm }}
             </n-tag>
@@ -209,7 +210,16 @@
 
       <template #footer>
         <div style="display: flex; justify-content: flex-end; gap: 8px;">
-          <n-button @click="showPermEditor = false">关闭</n-button>
+          <n-button @click="handleClosePermEditor">关闭</n-button>
+          <n-button
+            v-if="authStore.isAdmin"
+            type="primary"
+            :loading="permSaving"
+            :disabled="!permissionDirty"
+            @click="savePermissionChanges"
+          >
+            保存修改
+          </n-button>
         </div>
       </template>
     </n-modal>
@@ -287,6 +297,7 @@ const creatingGroup = ref(false)
 // ─── Permission editing ───
 const showPermEditor = ref(false)
 const editingGroupName = ref('')
+const originalGroupPerms = ref<string[]>([])
 const editingGroupPerms = ref<string[]>([])
 const permLoading = ref(false)
 const newPermission = ref('')
@@ -311,10 +322,21 @@ const groupOptions = computed(() =>
 const allLeafKeys = new Set(ALL_PERMISSION_KEYS)
 const allLeafCount = ALL_PERMISSION_KEYS.length
 
+function normalizePermissions(permissions: string[]): string[] {
+  return [...new Set(permissions.map(p => p.trim()).filter(Boolean))].sort()
+}
+
 /** Currently checked leaf keys (intersection with the tree) */
 const checkedPermKeys = computed(() =>
   editingGroupPerms.value.filter(p => allLeafKeys.has(p))
 )
+
+const permissionDirty = computed(() => {
+  const current = normalizePermissions(editingGroupPerms.value)
+  const original = normalizePermissions(originalGroupPerms.value)
+  if (current.length !== original.length) return true
+  return current.some((permission, index) => permission !== original[index])
+})
 
 /** Permissions that are in the group but NOT in the standard tree (plugin perms etc.) */
 const extraPerms = computed(() =>
@@ -375,78 +397,81 @@ function handleTreeExpand(keys: string[]) {
   expandedKeys.value = keys
 }
 
-/** When user checks/unchecks tree nodes, diff and send API calls */
-async function handleTreeCheck(newCheckedKeys: string[]) {
+/** When user checks/unchecks tree nodes, update local draft only. */
+function handleTreeCheck(newCheckedKeys: string[]) {
   if (!authStore.isAdmin) return
 
-  // Only leaf keys matter
-  const newLeaves = new Set(newCheckedKeys.filter(k => allLeafKeys.has(k)))
-  const oldLeaves = new Set(checkedPermKeys.value)
-
-  const toAdd = [...newLeaves].filter(k => !oldLeaves.has(k))
-  const toRemove = [...oldLeaves].filter(k => !newLeaves.has(k))
-
-  if (toAdd.length === 0 && toRemove.length === 0) return
-
-  permSaving.value = true
-  try {
-    // Execute add/remove in parallel batches
-    const promises: Promise<any>[] = []
-    for (const perm of toAdd) {
-      promises.push(serverApi.addTshockPermission(props.serverId, editingGroupName.value, perm))
-    }
-    for (const perm of toRemove) {
-      promises.push(serverApi.removeTshockPermission(props.serverId, editingGroupName.value, perm))
-    }
-    await Promise.all(promises)
-
-    // Update local state
-    let updated = editingGroupPerms.value.filter(p => !toRemove.includes(p))
-    updated.push(...toAdd)
-    editingGroupPerms.value = updated.sort()
-
-    const msg = []
-    if (toAdd.length > 0) msg.push(`+${toAdd.length}`)
-    if (toRemove.length > 0) msg.push(`-${toRemove.length}`)
-    notification.success('权限已更新', msg.join('  '))
-    loadOverview() // refresh counts
-  } catch (error: any) {
-    notification.error('权限更新失败', error?.response?.data?.error || '部分权限可能未生效，请刷新重试')
-    // Reload from server to get accurate state
-    openPermEditor(editingGroupName.value)
-  } finally {
-    permSaving.value = false
-  }
+  const newLeaves = newCheckedKeys.filter(k => allLeafKeys.has(k))
+  const extra = editingGroupPerms.value.filter(p => !allLeafKeys.has(p))
+  editingGroupPerms.value = normalizePermissions([...extra, ...newLeaves])
 }
 
-async function handleRemoveExtraPerm(perm: string) {
-  try {
-    await serverApi.removeTshockPermission(props.serverId, editingGroupName.value, perm)
-    editingGroupPerms.value = editingGroupPerms.value.filter(p => p !== perm)
-    notification.success('权限已移除', perm)
-    loadOverview()
-  } catch (error: any) {
-    notification.error('移除失败', error?.response?.data?.error || '')
-  }
+function handleRemoveExtraPermLocal(perm: string) {
+  editingGroupPerms.value = editingGroupPerms.value.filter(p => p !== perm)
 }
 
-async function handleAddCustomPerm() {
+function handleAddCustomPerm() {
   const perm = newPermission.value.trim()
   if (!perm) return
   if (editingGroupPerms.value.includes(perm)) {
     notification.error('权限已存在', perm)
     return
   }
+  editingGroupPerms.value = normalizePermissions([...editingGroupPerms.value, perm])
+  newPermission.value = ''
+}
+
+async function savePermissionChanges() {
+  if (!authStore.isAdmin || !permissionDirty.value) return
+
+  const original = normalizePermissions(originalGroupPerms.value)
+  const current = normalizePermissions(editingGroupPerms.value)
+  const originalSet = new Set(original)
+  const currentSet = new Set(current)
+  const toAdd = current.filter(permission => !originalSet.has(permission))
+  const toRemove = original.filter(permission => !currentSet.has(permission))
+
+  permSaving.value = true
   try {
-    await serverApi.addTshockPermission(props.serverId, editingGroupName.value, perm)
-    editingGroupPerms.value.push(perm)
-    editingGroupPerms.value.sort()
-    newPermission.value = ''
-    notification.success('权限已添加', perm)
-    loadOverview()
+    const promises: Promise<any>[] = []
+    for (const permission of toAdd) {
+      promises.push(serverApi.addTshockPermission(props.serverId, editingGroupName.value, permission))
+    }
+    for (const permission of toRemove) {
+      promises.push(serverApi.removeTshockPermission(props.serverId, editingGroupName.value, permission))
+    }
+    await Promise.all(promises)
+
+    originalGroupPerms.value = current
+    editingGroupPerms.value = current
+    const msg = []
+    if (toAdd.length > 0) msg.push(`新增 ${toAdd.length}`)
+    if (toRemove.length > 0) msg.push(`移除 ${toRemove.length}`)
+    notification.success('权限已保存', msg.join('，') || '没有变化')
+    await loadOverview()
   } catch (error: any) {
-    notification.error('添加失败', error?.response?.data?.error || '')
+    notification.error('保存权限失败', error?.response?.data?.error || '部分权限可能未生效，请刷新重试')
+    await openPermEditor(editingGroupName.value)
+  } finally {
+    permSaving.value = false
   }
+}
+
+function handleClosePermEditor() {
+  if (!permissionDirty.value) {
+    showPermEditor.value = false
+    return
+  }
+
+  dialog.warning({
+    title: '存在未保存修改',
+    content: '关闭后会丢弃当前权限修改。',
+    positiveText: '丢弃并关闭',
+    negativeText: '继续编辑',
+    onPositiveClick: () => {
+      showPermEditor.value = false
+    }
+  })
 }
 
 // ─── Table Columns ───
@@ -650,9 +675,12 @@ async function openPermEditor(groupName: string) {
   expandedKeys.value = []
   try {
     const response = await serverApi.getTshockGroup(props.serverId, groupName)
-    editingGroupPerms.value = response.data.permissions
+    const permissions = normalizePermissions(response.data.permissions)
+    originalGroupPerms.value = permissions
+    editingGroupPerms.value = permissions
   } catch (error: any) {
     notification.error('加载权限失败', error?.response?.data?.error || '')
+    originalGroupPerms.value = []
     editingGroupPerms.value = []
   } finally {
     permLoading.value = false
