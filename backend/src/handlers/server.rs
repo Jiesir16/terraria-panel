@@ -602,7 +602,10 @@ fn load_server_detail_from_db(state: &AppState, id: &str) -> Result<ServerDetail
                 })
             },
         )
-        .map_err(|_| AppError::NotFound("Server not found".to_string()))?;
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => AppError::NotFound("Server not found".to_string()),
+            _ => AppError::DatabaseError(e.to_string()),
+        })?;
 
     Ok(ServerDetail {
         server,
@@ -1161,7 +1164,10 @@ pub async fn update_server(
                 })
             },
         )
-        .map_err(|_| AppError::NotFound("Server not found".to_string()))?;
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => AppError::NotFound("Server not found".to_string()),
+            _ => AppError::DatabaseError(e.to_string()),
+        })?;
 
     let detail_summary = format!(
         "name={}; port={}; version={}; world={:?}; max_players={}",
@@ -1254,7 +1260,10 @@ pub async fn start_server(
                     ))
                 },
             )
-            .map_err(|_| AppError::NotFound("Server not found".to_string()))?;
+            .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => AppError::NotFound("Server not found".to_string()),
+            _ => AppError::DatabaseError(e.to_string()),
+        })?;
         result
         // db (MutexGuard) drops here at end of block
     };
@@ -1342,6 +1351,11 @@ pub async fn start_server(
         panel_config.as_ref(),
     )?;
     sync_ssc_runtime_config(&config_path, panel_config.as_ref())?;
+
+    // Auto-provision REST API token before the process boots, ensuring it's loaded instantly.
+    if let Err(e) = crate::services::tshock_rest::ensure_rest_setup(&state.config.server.data_dir, &id) {
+        tracing::warn!(server_id = %id, error = %e, "Failed to pre-provision REST API token before startup");
+    }
 
     // Resolve world file path
     let world_dir = server_dir.join("world");
@@ -1604,7 +1618,10 @@ pub async fn send_command(
             params![id],
             |row| row.get::<_, Option<String>>(0),
         )
-        .map_err(|_| AppError::NotFound("Server not found".to_string()))?
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => AppError::NotFound("Server not found".to_string()),
+            _ => AppError::DatabaseError(e.to_string()),
+        })?
     };
 
     if !crate::services::can_execute_command(&auth, server_owner_id.as_deref(), &req.command) {
@@ -1648,7 +1665,10 @@ pub async fn server_status(
             params![id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .map_err(|_| AppError::NotFound("Server not found".to_string()))?
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => AppError::NotFound("Server not found".to_string()),
+            _ => AppError::DatabaseError(e.to_string()),
+        })?
     };
 
     let process_running = state.process_manager.is_running(&id).await;

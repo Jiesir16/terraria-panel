@@ -366,10 +366,22 @@ const worldFileOptions = ref<{ label: string; value: string }[]>([])
 const worldFilesLoading = ref(false)
 const usingExistingWorld = computed(() => {
   const worldName = formData.value.world_name?.trim()
-  if (!worldName) {
-    return false
+  
+  // If user explicitly unchecked auto_create and provided a world name
+  if (worldName && !formData.value.auto_create) {
+    return true
   }
-  return worldFileOptions.value.some(option => option.value === worldName)
+
+  // If the target world *already exists on disk*, lock the generation settings
+  // because TShock will just load the existing world instead of creating a new one.
+  const targetName = (worldName || 'world.wld').toLowerCase()
+  const targetBase = targetName.replace(/\.wld$/, '')
+  const worldOnDisk = worldFileOptions.value.some(o => {
+    const optName = String(o.value).toLowerCase()
+    return optName === targetName || optName.replace(/\.wld$/, '') === targetBase
+  })
+  
+  return worldOnDisk
 })
 
 async function loadWorldFiles() {
