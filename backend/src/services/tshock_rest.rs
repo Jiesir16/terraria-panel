@@ -6,7 +6,7 @@
 
 use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Map, Value};
 use std::path::Path;
 use std::time::Duration;
 use uuid::Uuid;
@@ -62,10 +62,173 @@ pub fn resolve_rest_info(
 /// { "UserGroupName": "superadmin", "Username": "Panel" }
 /// ```
 fn token_permission_object() -> Value {
-    serde_json::json!({
+    json!({
         "UserGroupName": "superadmin",
         "Username": "Panel"
     })
+}
+
+fn token_permission_object_for_group(group: &str) -> Value {
+    json!({
+        "UserGroupName": group,
+        "Username": "Panel"
+    })
+}
+
+fn read_config_json(config_path: &Path) -> Result<Value, AppError> {
+    let content = std::fs::read_to_string(config_path)
+        .map_err(|e| AppError::FileError(format!("Failed to read config.json: {}", e)))?;
+    serde_json::from_str(&content)
+        .map_err(|e| AppError::BadRequest(format!("Invalid config.json: {}", e)))
+}
+
+fn write_config_json(config_path: &Path, config: &Value) -> Result<(), AppError> {
+    let pretty = serde_json::to_string_pretty(config)
+        .map_err(|e| AppError::FileError(format!("Failed to serialize config.json: {}", e)))?;
+    std::fs::write(config_path, pretty.as_bytes())
+        .map_err(|e| AppError::FileError(format!("Failed to write config.json: {}", e)))
+}
+
+fn settings_obj(config: &Value) -> Option<&Map<String, Value>> {
+    config
+        .get("Settings")
+        .and_then(|v| v.as_object())
+        .or_else(|| config.as_object())
+}
+
+fn settings_obj_mut(config: &mut Value) -> Result<&mut Map<String, Value>, AppError> {
+    if config.get("Settings").is_some() {
+        if !config.get("Settings").is_some_and(|v| v.is_object()) {
+            if let Some(root) = config.as_object_mut() {
+                root.insert("Settings".to_string(), Value::Object(Map::new()));
+            }
+        }
+        return config
+            .get_mut("Settings")
+            .and_then(|v| v.as_object_mut())
+            .ok_or_else(|| AppError::BadRequest("Invalid config.json Settings object".to_string()));
+    }
+
+    config
+        .as_object_mut()
+        .ok_or_else(|| AppError::BadRequest("Invalid config.json root object".to_string()))
+}
+
+fn tokens_obj(settings: &Map<String, Value>) -> Option<&Map<String, Value>> {
+    settings
+        .get("ApplicationRestTokens")
+        .and_then(|v| v.as_object())
+}
+
+fn tokens_obj_mut(settings: &mut Map<String, Value>) -> &mut Map<String, Value> {
+    let tokens = settings
+        .entry("ApplicationRestTokens")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !tokens.is_object() {
+        *tokens = Value::Object(Map::new());
+    }
+    tokens.as_object_mut().expect("tokens object just initialized")
+}
+
+fn cached_token(token_file: &Path) -> Result<Option<String>, AppError> {
+    if !token_file.exists() {
+        return Ok(None);
+    }
+
+    let token = std::fs::read_to_string(token_file)
+        .map_err(|e| AppError::FileError(e.to_string()))?
+        .trim()
+        .to_string();
+    if token.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(token))
+    }
+}
+
+fn cache_token(token_file: &Path, token: &str) {
+    let _ = std::fs::write(token_file, token.as_bytes());
+}
+
+fn inject_token_in_config(
+    config_path: &Path,
+    config: &mut Value,
+    token: &str,
+) -> Result<(), AppError> {
+    let settings = settings_obj_mut(config)?;
+    settings.insert("RestApiEnabled".to_string(), Value::Bool(true));
+    settings.insert("RestApiPort".to_string(), Value::Number(7878.into()));
+    tokens_obj_mut(settings).insert(token.to_string(), token_permission_object());
+    write_config_json(config_path, config)
+}
+
+fn ensure_rest_api_enabled(config_path: &Path, config: &mut Value) -> Result<(), AppError> {
+    let mut changed = false;
+    {
+        let settings = settings_obj_mut(config)?;
+        if settings.get("RestApiEnabled").and_then(|v| v.as_bool()) != Some(true) {
+            settings.insert("RestApiEnabled".to_string(), Value::Bool(true));
+            changed = true;
+        }
+        if settings.get("RestApiPort").and_then(|v| v.as_u64()) != Some(7878) {
+            settings.insert("RestApiPort".to_string(), Value::Number(7878.into()));
+            changed = true;
+        }
+    }
+
+    if changed {
+        write_config_json(config_path, config)?;
+    }
+    Ok(())
+}
+
+fn fix_legacy_token_format(
+    config_path: &Path,
+    config: &mut Value,
+    token_key: &str,
+) -> Result<(), AppError> {
+    let settings = settings_obj_mut(config)?;
+    settings.insert("RestApiEnabled".to_string(), Value::Bool(true));
+    settings.insert("RestApiPort".to_string(), Value::Number(7878.into()));
+    let tokens = tokens_obj_mut(settings);
+    let group = tokens
+        .get(token_key)
+        .and_then(|value| value.as_str())
+        .filter(|group| !group.trim().is_empty())
+        .unwrap_or("superadmin")
+        .to_string();
+    tokens.insert(token_key.to_string(), token_permission_object_for_group(&group));
+    write_config_json(config_path, config)
+}
+
+fn token_entry_is_object(config: &Value, token: &str) -> bool {
+    settings_obj(config)
+        .and_then(tokens_obj)
+        .and_then(|tokens| tokens.get(token))
+        .is_some_and(|value| value.is_object())
+}
+
+fn token_entry_is_legacy(config: &Value, token: &str) -> bool {
+    settings_obj(config)
+        .and_then(tokens_obj)
+        .and_then(|tokens| tokens.get(token))
+        .is_some_and(|value| value.is_string())
+}
+
+fn first_config_token(config: &Value) -> Option<(String, bool)> {
+    settings_obj(config)
+        .and_then(tokens_obj)
+        .and_then(|tokens| {
+            tokens.iter().find_map(|(token, value)| {
+                if value.is_object() {
+                    Some((token.clone(), false))
+                } else if value.is_string() {
+                    Some((token.clone(), true))
+                } else {
+                    None
+                }
+            })
+        })
 }
 
 /// Read the TShock application REST token.
@@ -77,18 +240,7 @@ fn token_permission_object() -> Value {
 ///    `ApplicationRestTokens`, and persist it in `panel-rest-token.txt`.
 ///    The server must be restarted for TShock to load the new token.
 fn read_application_token(config_dir: &Path) -> Result<String, AppError> {
-    // 1) Check panel-managed token file first
     let token_file = config_dir.join("panel-rest-token.txt");
-    if token_file.exists() {
-        let token = std::fs::read_to_string(&token_file)
-            .map_err(|e| AppError::FileError(e.to_string()))?
-            .trim()
-            .to_string();
-        if !token.is_empty() {
-            return Ok(token);
-        }
-    }
-
     let config_path = config_dir.join("config.json");
     if !config_path.exists() {
         return Err(AppError::NotFound(
@@ -96,35 +248,38 @@ fn read_application_token(config_dir: &Path) -> Result<String, AppError> {
         ));
     }
 
-    let content = std::fs::read_to_string(&config_path)
-        .map_err(|e| AppError::FileError(e.to_string()))?;
-    let mut config: Value = serde_json::from_str(&content)
-        .map_err(|e| AppError::BadRequest(format!("Invalid config.json: {}", e)))?;
+    let mut config = read_config_json(&config_path)?;
 
-    // 2) Try to extract an existing token from ApplicationRestTokens
-    {
-        let settings = config
-            .get("Settings")
-            .and_then(|v| v.as_object())
-            .or_else(|| config.as_object());
-        if let Some(tokens) = settings
-            .and_then(|s| s.get("ApplicationRestTokens"))
-            .and_then(|v| v.as_object())
-        {
-            for (token, _perms) in tokens {
-                // Persist for fast lookup next time
-                let _ = std::fs::write(&token_file, token.as_bytes());
-                return Ok(token.clone());
-            }
+    // 1) Use panel-managed token only after verifying config.json still contains it.
+    if let Some(token) = cached_token(&token_file)? {
+        if token_entry_is_object(&config, &token) {
+            ensure_rest_api_enabled(&config_path, &mut config)?;
+            return Ok(token);
         }
+        if token_entry_is_legacy(&config, &token) {
+            fix_legacy_token_format(&config_path, &mut config, &token)?;
+            return Ok(token);
+        }
+
+        inject_token_in_config(&config_path, &mut config, &token)?;
+        return Ok(token);
     }
 
-    // 3) No token exists — auto-provision one
+    // 2) No cached token: use the first valid config token and cache it.
+    if let Some((token, legacy)) = first_config_token(&config) {
+        if legacy {
+            fix_legacy_token_format(&config_path, &mut config, &token)?;
+        } else {
+            ensure_rest_api_enabled(&config_path, &mut config)?;
+        }
+        cache_token(&token_file, &token);
+        return Ok(token);
+    }
+
+    // 3) No token exists: auto-provision one.
     tracing::info!("No REST API token found for server, auto-provisioning one");
     let new_token = provision_token_in_config(&config_path, &mut config)?;
-
-    // Also save to panel-rest-token.txt for fast future lookups
-    let _ = std::fs::write(&token_file, new_token.as_bytes());
+    cache_token(&token_file, &new_token);
 
     Ok(new_token)
 }
@@ -133,33 +288,7 @@ fn read_application_token(config_dir: &Path) -> Result<String, AppError> {
 /// enable REST API, and write the file back. Returns the new token string.
 fn provision_token_in_config(config_path: &Path, config: &mut Value) -> Result<String, AppError> {
     let new_token = Uuid::new_v4().to_string().replace('-', "");
-    let perm_obj = token_permission_object();
-
-    if let Some(settings) = config.get_mut("Settings").and_then(|v| v.as_object_mut()) {
-        // Ensure RestApiEnabled is true
-        settings.insert("RestApiEnabled".to_string(), Value::Bool(true));
-        // Insert token with proper TShock object format
-        let tokens_obj = settings
-            .entry("ApplicationRestTokens")
-            .or_insert_with(|| Value::Object(serde_json::Map::new()));
-        if let Some(map) = tokens_obj.as_object_mut() {
-            map.insert(new_token.clone(), perm_obj);
-        }
-    } else if let Some(root) = config.as_object_mut() {
-        root.insert("RestApiEnabled".to_string(), Value::Bool(true));
-        let tokens_obj = root
-            .entry("ApplicationRestTokens")
-            .or_insert_with(|| Value::Object(serde_json::Map::new()));
-        if let Some(map) = tokens_obj.as_object_mut() {
-            map.insert(new_token.clone(), perm_obj);
-        }
-    }
-
-    // Write config back
-    let pretty = serde_json::to_string_pretty(config)
-        .map_err(|e| AppError::FileError(format!("Failed to serialize config.json: {}", e)))?;
-    std::fs::write(config_path, pretty.as_bytes())
-        .map_err(|e| AppError::FileError(format!("Failed to write config.json: {}", e)))?;
+    inject_token_in_config(config_path, config, &new_token)?;
 
     tracing::info!(
         "REST API token provisioned into config.json. Server restart required for TShock to load it."
@@ -183,37 +312,29 @@ pub fn ensure_rest_setup(data_dir: &Path, server_id: &str) -> Result<(bool, Stri
         ));
     }
 
-    let token_file = config_dir.join("panel-rest-token.txt");
+    let config = read_config_json(&config_path)?;
 
-    // Check if token already provisioned
-    let content = std::fs::read_to_string(&config_path)
-        .map_err(|e| AppError::FileError(e.to_string()))?;
-    let mut config: Value = serde_json::from_str(&content)
-        .map_err(|e| AppError::BadRequest(format!("Invalid config.json: {}", e)))?;
-
-    let settings = config
-        .get("Settings")
-        .and_then(|v| v.as_object())
-        .or_else(|| config.as_object());
-
-    let rest_enabled = settings
+    let rest_enabled = settings_obj(&config)
         .and_then(|s| s.get("RestApiEnabled"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-
-    let has_token = settings
-        .and_then(|s| s.get("ApplicationRestTokens"))
-        .and_then(|v| v.as_object())
-        .map(|m| !m.is_empty())
+    let rest_port_ok = settings_obj(&config)
+        .and_then(|s| s.get("RestApiPort"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(7878)
+        == 7878;
+    let has_clean_token = first_config_token(&config)
+        .map(|(_, legacy)| !legacy)
         .unwrap_or(false);
 
-    if rest_enabled && has_token {
+    if rest_enabled && rest_port_ok && has_clean_token {
+        let token = read_application_token(&config_dir)?;
+        cache_token(&config_dir.join("panel-rest-token.txt"), &token);
         return Ok((true, "REST API is configured and ready.".to_string()));
     }
 
-    // Need to provision
-    let new_token = provision_token_in_config(&config_path, &mut config)?;
-    let _ = std::fs::write(&token_file, new_token.as_bytes());
+    let token = read_application_token(&config_dir)?;
+    cache_token(&config_dir.join("panel-rest-token.txt"), &token);
 
     Ok((
         false,
