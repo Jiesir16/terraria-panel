@@ -45,7 +45,7 @@
         </n-tab-pane>
 
         <n-tab-pane v-if="authStore.isOperator" name="security" tab="TShock权限">
-          <tshock-manager :server-id="serverId" ref="tshockManagerRef" />
+          <TShockManager :server-id="serverId" ref="tshockManagerRef" />
         </n-tab-pane>
 
         <n-tab-pane name="mods" tab="Mod管理">
@@ -111,7 +111,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { NSpin, NTabs, NTabPane, NButton, useDialog } from 'naive-ui'
 import { useAuthStore } from '../stores/auth'
 import { useServersStore } from '../stores/servers'
-import { serverApi } from '../api/server'
 import { modsApi } from '../api/mods'
 import { savesApi } from '../api/saves'
 import { useNotification } from '../composables/useNotification'

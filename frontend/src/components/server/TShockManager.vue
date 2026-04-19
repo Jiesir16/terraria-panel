@@ -203,7 +203,6 @@ import {
   type TShockSecurityOverview,
   type TShockUserAccount,
   type TShockGroupSummary,
-  type TShockGroupDetail,
   type TShockSscCharacterSummary,
   type TShockSscCharacter,
 } from '../../api/server'
