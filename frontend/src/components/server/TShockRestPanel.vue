@@ -20,6 +20,21 @@
     </n-alert>
 
     <div class="rest-cards">
+      <n-card title="REST API 状态" class="rest-card">
+        <div class="world-actions compact">
+          <n-button size="small" @click="handleTokenTest" :loading="tokenTestLoading">测试 Token</n-button>
+          <n-button size="small" type="warning" @click="handleRestRestart" :loading="actionLoading.restRestart">
+            REST 重启服务器
+          </n-button>
+        </div>
+        <p class="hint-text" style="margin-top: 10px;">
+          已接入：server status/broadcast/off/rawcmd/reload/restart、players list/read/kick/ban/kill/mute/unmute、users、groups、bans、world。
+        </p>
+        <n-card v-if="tokenTestResult" size="small" title="Token 测试结果">
+          <pre class="pre-block">{{ tokenTestResult }}</pre>
+        </n-card>
+      </n-card>
+
       <!-- ─── Server Status ─── -->
       <n-card title="服务器状态" class="rest-card">
         <n-spin :show="statusLoading">
@@ -301,6 +316,8 @@ const restartingForRest = ref(false)
 // Server status
 const statusLoading = ref(false)
 const serverStatus = ref<TShockServerStatus | null>(null)
+const tokenTestLoading = ref(false)
+const tokenTestResult = ref('')
 const motdLoading = ref(false)
 const motdText = ref('')
 const rulesLoading = ref(false)
@@ -349,6 +366,7 @@ const actionLoading = reactive({
   autosaveOn: false,
   autosaveOff: false,
   reload: false,
+  restRestart: false,
   broadcast: false,
   rawcmd: false,
 })
@@ -371,10 +389,11 @@ const playerColumns: DataTableColumns = [
   {
     title: '操作',
     key: 'actions',
-    width: 200,
+    width: 250,
     render: (row: any) => {
       return h('div', { style: 'display:flex;gap:6px;' }, [
         h(NButton, { size: 'tiny', type: 'warning', onClick: () => handleKick(row.nickname) }, { default: () => '踢出' }),
+        h(NButton, { size: 'tiny', type: 'error', onClick: () => handleBanPlayer(row.nickname) }, { default: () => '封禁' }),
         h(NButton, { size: 'tiny', type: 'error', onClick: () => handleKillPlayer(row.nickname) }, { default: () => '击杀' }),
         h(NButton, { size: 'tiny', onClick: () => handleMute(row.nickname) }, { default: () => '禁言' }),
         h(NButton, { size: 'tiny', onClick: () => handleUnmute(row.nickname) }, { default: () => '解禁' }),
@@ -592,6 +611,21 @@ function traceRestError(e: any) {
   }
 }
 
+async function handleTokenTest() {
+  tokenTestLoading.value = true
+  tokenTestResult.value = ''
+  try {
+    const resp = await tshockRestApi.tokenTest(props.serverId)
+    tokenTestResult.value = JSON.stringify(resp.data, null, 2)
+    notification.success('REST Token 可用', '')
+  } catch (e: any) {
+    tokenTestResult.value = e?.response?.data ? JSON.stringify(e.response.data, null, 2) : ''
+    notification.error('REST Token 测试失败', e?.response?.data?.error || '')
+  } finally {
+    tokenTestLoading.value = false
+  }
+}
+
 async function handleRestartForRest() {
   restartingForRest.value = true
   try {
@@ -609,6 +643,27 @@ async function handleRestartForRest() {
   }
 }
 
+function handleRestRestart() {
+  dialog.warning({
+    title: '确认 REST 重启',
+    content: '确定通过 TShock REST API 重启服务器吗？在线玩家会短暂断开。',
+    positiveText: '重启',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      actionLoading.restRestart = true
+      try {
+        await tshockRestApi.serverRestart(props.serverId)
+        notification.success('REST 重启已发送', '')
+        setTimeout(refreshAll, 8000)
+      } catch (e: any) {
+        notification.error('REST 重启失败', e?.response?.data?.error || '')
+      } finally {
+        actionLoading.restRestart = false
+      }
+    }
+  })
+}
+
 // ─── Player actions ───
 
 function handleKick(player: string) {
@@ -624,6 +679,25 @@ function handleKick(player: string) {
         loadPlayers()
       } catch (e: any) {
         notification.error('踢出失败', e?.response?.data?.error || '')
+      }
+    }
+  })
+}
+
+function handleBanPlayer(player: string) {
+  dialog.error({
+    title: '确认封禁',
+    content: `确定要封禁玩家「${player}」吗？`,
+    positiveText: '封禁',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await tshockRestApi.playerBan(props.serverId, player, '被管理员封禁')
+        notification.success('已封禁玩家', player)
+        loadPlayers()
+        loadBans()
+      } catch (e: any) {
+        notification.error('封禁失败', e?.response?.data?.error || '')
       }
     }
   })
@@ -889,6 +963,7 @@ defineExpose({ refreshAll })
 
 .rest-cards {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
 }
 
@@ -932,6 +1007,12 @@ defineExpose({ refreshAll })
   border-top: 1px solid var(--border-color);
 }
 
+.world-actions.compact {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
 .command-section h4 {
   margin: 0 0 8px 0;
   color: var(--text-primary);
@@ -972,6 +1053,10 @@ defineExpose({ refreshAll })
 }
 
 @media (max-width: 900px) {
+  .rest-cards {
+    grid-template-columns: 1fr;
+  }
+
   .item-form {
     grid-template-columns: 1fr;
   }

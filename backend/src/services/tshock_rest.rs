@@ -456,12 +456,20 @@ impl TShockRestClient {
             .await
     }
 
+    pub async fn token_test(&self) -> Result<Value, AppError> {
+        self.get("/tokentest", &[]).await
+    }
+
     pub async fn server_broadcast(&self, msg: &str) -> Result<Value, AppError> {
         self.post("/v2/server/broadcast", &[("msg", msg)]).await
     }
 
     pub async fn server_reload(&self) -> Result<Value, AppError> {
         self.post("/v3/server/reload", &[]).await
+    }
+
+    pub async fn server_restart(&self) -> Result<Value, AppError> {
+        self.get("/v3/server/restart", &[]).await
     }
 
     pub async fn server_rawcmd(&self, cmd: &str) -> Result<Value, AppError> {
@@ -505,6 +513,14 @@ impl TShockRestClient {
             params.push(("reason", r));
         }
         self.post("/v2/players/kick", &params).await
+    }
+
+    pub async fn player_ban(&self, player: &str, reason: Option<&str>) -> Result<Value, AppError> {
+        let mut params = vec![("player", player)];
+        if let Some(r) = reason {
+            params.push(("reason", r));
+        }
+        self.post("/v2/players/ban", &params).await
     }
 
     pub async fn player_kill(&self, player: &str) -> Result<Value, AppError> {

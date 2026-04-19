@@ -233,6 +233,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             post(handlers::tshock_rest::rest_setup),
         )
         .route(
+            "/api/servers/:id/rest/tokentest",
+            get(handlers::tshock_rest::rest_token_test),
+        )
+        .route(
             "/api/servers/:id/rest/server/status",
             get(handlers::tshock_rest::rest_server_status),
         )
@@ -243,6 +247,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/servers/:id/rest/server/reload",
             post(handlers::tshock_rest::rest_server_reload),
+        )
+        .route(
+            "/api/servers/:id/rest/server/restart",
+            post(handlers::tshock_rest::rest_server_restart),
         )
         .route(
             "/api/servers/:id/rest/server/rawcmd",
@@ -284,6 +292,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/servers/:id/rest/players/kick",
             post(handlers::tshock_rest::rest_player_kick),
+        )
+        .route(
+            "/api/servers/:id/rest/players/ban",
+            post(handlers::tshock_rest::rest_player_ban),
         )
         .route(
             "/api/servers/:id/rest/players/kill",

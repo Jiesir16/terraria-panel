@@ -73,6 +73,9 @@ export const tshockRestApi = {
   setup: (serverId: string) =>
     api.post<RestSetupResult>(`${base(serverId)}/setup`),
 
+  tokenTest: (serverId: string) =>
+    api.get(`${base(serverId)}/tokentest`),
+
   // ── Server ──
   serverStatus: (serverId: string) =>
     api.get<TShockServerStatus>(`${base(serverId)}/server/status`),
@@ -82,6 +85,9 @@ export const tshockRestApi = {
 
   serverReload: (serverId: string) =>
     api.post(`${base(serverId)}/server/reload`),
+
+  serverRestart: (serverId: string) =>
+    api.post(`${base(serverId)}/server/restart`),
 
   serverRawcmd: (serverId: string, cmd: string) =>
     api.post(`${base(serverId)}/server/rawcmd`, { cmd }),
@@ -113,6 +119,9 @@ export const tshockRestApi = {
 
   playerKick: (serverId: string, player: string, reason?: string) =>
     api.post(`${base(serverId)}/players/kick`, { player, reason }),
+
+  playerBan: (serverId: string, player: string, reason?: string) =>
+    api.post(`${base(serverId)}/players/ban`, { player, reason }),
 
   playerKill: (serverId: string, player: string) =>
     api.post(`${base(serverId)}/players/kill`, { player }),

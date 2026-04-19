@@ -143,6 +143,130 @@ async fn fetch_catalog_from(endpoint: &str) -> Result<Vec<TerrariaItem>, AppErro
     Ok(items)
 }
 
+fn strip_html(input: &str) -> String {
+    let mut output = String::new();
+    let mut in_tag = false;
+    let mut entity = String::new();
+    let mut in_entity = false;
+
+    for c in input.chars() {
+        if in_tag {
+            if c == '>' {
+                in_tag = false;
+            }
+            continue;
+        }
+
+        if in_entity {
+            if c == ';' {
+                output.push_str(match entity.as_str() {
+                    "amp" => "&",
+                    "quot" => "\"",
+                    "apos" => "'",
+                    "lt" => "<",
+                    "gt" => ">",
+                    "nbsp" => " ",
+                    _ => "",
+                });
+                entity.clear();
+                in_entity = false;
+            } else {
+                entity.push(c);
+            }
+            continue;
+        }
+
+        match c {
+            '<' => in_tag = true,
+            '&' => in_entity = true,
+            _ => output.push(c),
+        }
+    }
+
+    output.trim().replace('\n', " ").replace('\t', " ")
+}
+
+fn extract_table_cells(row: &str) -> Vec<String> {
+    let mut cells = Vec::new();
+    let mut offset = 0;
+    while let Some(start) = row[offset..].find("<td") {
+        let cell_start = offset + start;
+        let Some(content_start) = row[cell_start..].find('>').map(|pos| cell_start + pos + 1) else {
+            break;
+        };
+        let Some(end) = row[content_start..].find("</td>").map(|pos| content_start + pos) else {
+            break;
+        };
+        cells.push(strip_html(&row[content_start..end]));
+        offset = end + 5;
+    }
+    cells
+}
+
+fn parse_zh_item_id_page(html: &str) -> HashMap<i32, String> {
+    let mut names = HashMap::new();
+    let mut offset = 0;
+
+    while let Some(start) = html[offset..].find("<tr") {
+        let row_start = offset + start;
+        let Some(content_start) = html[row_start..].find('>').map(|pos| row_start + pos + 1) else {
+            break;
+        };
+        let Some(row_end) = html[content_start..].find("</tr>").map(|pos| content_start + pos) else {
+            break;
+        };
+
+        let cells = extract_table_cells(&html[content_start..row_end]);
+        if cells.len() >= 3 {
+            if let Ok(id) = cells[0].trim().parse::<i32>() {
+                let zh_name = cells[1].trim();
+                let internal_name = cells[2].trim();
+                if !zh_name.is_empty() && !internal_name.is_empty() && !zh_name.contains("无官方名称") {
+                    names.insert(id, zh_name.to_string());
+                }
+            }
+        }
+
+        offset = row_end + 5;
+    }
+
+    names
+}
+
+async fn fetch_chinese_item_names() -> Result<HashMap<i32, String>, AppError> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| AppError::ProcessError(format!("Failed to create HTTP client: {}", e)))?;
+
+    let response = client
+        .get("https://terraria.wiki.gg/zh/wiki/Item_IDs")
+        .header("User-Agent", "terraria-panel")
+        .send()
+        .await
+        .map_err(|e| AppError::ProcessError(format!("Failed to download Chinese Terraria item IDs: {}", e)))?;
+
+    if !response.status().is_success() {
+        return Err(AppError::ProcessError(format!(
+            "Chinese Terraria item IDs download failed ({})",
+            response.status()
+        )));
+    }
+
+    let html = response
+        .text()
+        .await
+        .map_err(|e| AppError::ProcessError(format!("Failed to read Chinese Terraria item IDs: {}", e)))?;
+    let names = parse_zh_item_id_page(&html);
+    if names.is_empty() {
+        return Err(AppError::ProcessError(
+            "Chinese Terraria item ID page did not contain parsable rows".to_string(),
+        ));
+    }
+
+    Ok(names)
+}
+
 pub async fn download_catalog(data_dir: &Path, version: &str) -> Result<ItemCatalog, AppError> {
     let mut items = fetch_catalog_from("https://terraria.wiki.gg/api.php").await?;
     items.sort_by_key(|item| item.id);
@@ -155,12 +279,8 @@ pub async fn download_catalog(data_dir: &Path, version: &str) -> Result<ItemCata
     }
 
     let mut source = "terraria.wiki.gg Cargo Items".to_string();
-    match fetch_catalog_from("https://terraria.wiki.gg/zh/api.php").await {
-        Ok(zh_items) => {
-            let zh_names = zh_items
-                .into_iter()
-                .map(|item| (item.id, item.name))
-                .collect::<HashMap<_, _>>();
+    match fetch_chinese_item_names().await {
+        Ok(zh_names) => {
             for item in &mut items {
                 if let Some(zh_name) = zh_names.get(&item.id) {
                     if !zh_name.is_empty() && zh_name != &item.name {
@@ -168,7 +288,7 @@ pub async fn download_catalog(data_dir: &Path, version: &str) -> Result<ItemCata
                     }
                 }
             }
-            source = "terraria.wiki.gg Cargo Items + zh Cargo Items".to_string();
+            source = "terraria.wiki.gg Cargo Items + zh Item_IDs".to_string();
         }
         Err(e) => {
             tracing::warn!(error = %e, "Failed to download Chinese Terraria item names");
@@ -206,7 +326,7 @@ pub fn load_catalog(data_dir: &Path, version: &str) -> Result<Option<ItemCatalog
 
 pub async fn ensure_catalog(data_dir: &Path, version: &str) -> Result<ItemCatalog, AppError> {
     if let Some(catalog) = load_catalog(data_dir, version)? {
-        if catalog.source.contains("zh Cargo") || catalog.items.iter().any(|item| item.zh_name.is_some()) {
+        if catalog.items.iter().any(|item| item.zh_name.is_some()) {
             return Ok(catalog);
         }
     }

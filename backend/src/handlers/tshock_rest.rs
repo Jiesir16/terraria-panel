@@ -84,6 +84,17 @@ pub async fn rest_server_status(
     Ok(Json(data))
 }
 
+pub async fn rest_token_test(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth: Auth,
+) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
+    let client = client_for(&state, &id)?;
+    let data = client.token_test().await?;
+    Ok(Json(data))
+}
+
 #[derive(Deserialize)]
 pub struct BroadcastBody {
     pub msg: String,
@@ -107,6 +118,17 @@ pub async fn rest_server_reload(
 ) -> Result<Json<Value>, AppError> {
     let client = client_for(&state, &id)?;
     let data = client.server_reload().await?;
+    Ok(Json(data))
+}
+
+pub async fn rest_server_restart(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth: Auth,
+) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
+    let client = client_for(&state, &id)?;
+    let data = client.server_restart().await?;
     Ok(Json(data))
 }
 
@@ -298,6 +320,27 @@ pub async fn rest_player_kick(
     let data = client
         .player_kick(&body.player, body.reason.as_deref())
         .await?;
+    Ok(Json(data))
+}
+
+pub async fn rest_player_ban(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth: Auth,
+    Json(body): Json<KickBody>,
+) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
+    let client = client_for(&state, &id)?;
+    let data = client
+        .player_ban(&body.player, body.reason.as_deref())
+        .await?;
+    crate::db::log_operation(
+        &state.db,
+        &auth.user_id,
+        "REST封禁玩家",
+        Some(&id),
+        Some(&body.player),
+    );
     Ok(Json(data))
 }
 
