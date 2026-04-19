@@ -54,12 +54,12 @@
               </n-button>
             </div>
             <div class="inventory-toolbar secondary">
-              <n-input v-model:value="itemQuery" placeholder="搜索物品 ID / 名称 / 内部名" clearable @keyup.enter="loadItemCatalog" />
+              <n-input v-model:value="itemQuery" placeholder="搜索物品 ID / 中文名 / 英文名 / 内部名" clearable @keyup.enter="loadItemCatalog" />
               <n-button size="small" @click="loadItemCatalog" :loading="itemCatalogLoading">搜索/刷新清单</n-button>
               <n-button size="small" type="warning" @click="syncItemCatalog" :loading="itemCatalogSyncing">重新下载清单</n-button>
             </div>
             <span class="field-hint">
-              每行对应一个起始物品。清单缓存按当前服务器版本保存；旧的负数 netID 保留为手动/特殊 ID。
+              每行对应一个起始物品。清单缓存按当前服务器版本保存，并合并中文名；旧的负数 netID 保留为手动/特殊 ID。
             </span>
 
             <div v-if="formData.Settings.StartingInventory.length === 0" class="empty-inventory">
@@ -174,7 +174,7 @@ const modalShow = computed({
 })
 
 const itemOptions = computed(() => itemCatalog.value.map((item) => ({
-  label: `#${item.id} ${item.name} (${item.internal_name})`,
+  label: `#${item.id} ${itemDisplayName(item)} (${item.internal_name})`,
   value: item.id
 })))
 
@@ -188,6 +188,7 @@ const itemById = computed(() => {
 
 const itemCatalogColumns: DataTableColumns<TerrariaItem> = [
   { title: 'ID', key: 'id', width: 80 },
+  { title: '中文名', key: 'zh_name', width: 160, render: (row) => row.zh_name || '-' },
   { title: '名称', key: 'name', width: 180 },
   { title: '内部名', key: 'internal_name', width: 220 },
   {
@@ -271,9 +272,13 @@ function handleCancel() {
 function itemName(id: number) {
   const item = itemById.value.get(Number(id))
   if (item) {
-    return item.name
+    return itemDisplayName(item)
   }
   return Number(id) < 0 ? '手动/特殊 ID' : '未收录'
+}
+
+function itemDisplayName(item: TerrariaItem) {
+  return item.zh_name ? `${item.zh_name} / ${item.name}` : item.name
 }
 
 function addInventoryItem() {

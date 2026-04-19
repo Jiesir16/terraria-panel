@@ -19,9 +19,9 @@
       {{ restError }}
     </n-alert>
 
-    <n-tabs type="segment" v-model:value="activeTab">
+    <div class="rest-cards">
       <!-- ─── Server Status ─── -->
-      <n-tab-pane name="status" tab="服务器状态">
+      <n-card title="服务器状态" class="rest-card">
         <n-spin :show="statusLoading">
           <div v-if="serverStatus" class="status-grid">
             <div class="stat-item">
@@ -71,10 +71,10 @@
         <n-card v-if="rulesText" size="small" style="margin-top: 8px;" title="服务器规则">
           <pre class="pre-block">{{ rulesText }}</pre>
         </n-card>
-      </n-tab-pane>
+      </n-card>
 
       <!-- ─── Online Players ─── -->
-      <n-tab-pane name="players" tab="在线玩家">
+      <n-card title="在线玩家" class="rest-card">
         <div class="sub-section-header">
           <n-button size="small" @click="loadPlayers" :loading="playersLoading">刷新玩家列表</n-button>
         </div>
@@ -89,13 +89,13 @@
             striped
           />
         </n-spin>
-      </n-tab-pane>
+      </n-card>
 
       <!-- ─── Item Give ─── -->
-      <n-tab-pane name="items" tab="物品发放">
+      <n-card title="物品发放" class="rest-card">
         <div class="command-section">
           <h4>发放物品</h4>
-          <p class="hint-text">物品 ID 清单按当前服务器 TShock 版本缓存；缓存不存在时会自动从 wiki.gg 下载。</p>
+          <p class="hint-text">物品 ID 清单按当前服务器 TShock 版本缓存；缓存不存在时会自动从 wiki.gg 下载，并合并中文名。</p>
           <div class="item-form">
             <n-select
               v-model:value="givePlayer"
@@ -121,7 +121,7 @@
         </div>
 
         <div class="sub-section-header" style="margin-top: 18px;">
-          <n-input v-model:value="itemQuery" placeholder="搜索物品 ID / 名称 / 内部名" clearable @keyup.enter="loadItems" />
+          <n-input v-model:value="itemQuery" placeholder="搜索物品 ID / 中文名 / 英文名 / 内部名" clearable @keyup.enter="loadItems" />
           <n-button size="small" @click="loadItems" :loading="itemsLoading">搜索/刷新</n-button>
           <n-button size="small" type="warning" @click="syncItems" :loading="itemSyncLoading">重新下载物品清单</n-button>
         </div>
@@ -140,10 +140,13 @@
             striped
           />
         </n-spin>
-      </n-tab-pane>
+        <n-card v-if="itemGiveResult" size="small" style="margin-top: 12px;" title="最近发放结果">
+          <pre class="pre-block">{{ itemGiveResult }}</pre>
+        </n-card>
+      </n-card>
 
       <!-- ─── Bans ─── -->
-      <n-tab-pane name="bans" tab="封禁管理">
+      <n-card title="封禁管理" class="rest-card">
         <div class="sub-section-header">
           <n-button size="small" @click="loadBans" :loading="bansLoading">刷新封禁列表</n-button>
           <n-button size="small" type="primary" @click="showBanModal = true">+ 添加封禁</n-button>
@@ -175,10 +178,10 @@
             </n-form-item>
           </n-form>
         </n-modal>
-      </n-tab-pane>
+      </n-card>
 
       <!-- ─── World Operations ─── -->
-      <n-tab-pane name="world" tab="世界操作">
+      <n-card title="世界操作" class="rest-card">
         <n-spin :show="worldLoading">
           <div v-if="worldInfo" class="status-grid">
             <div class="stat-item">
@@ -236,10 +239,10 @@
             重载配置
           </n-button>
         </div>
-      </n-tab-pane>
+      </n-card>
 
       <!-- ─── Broadcast & Raw Command ─── -->
-      <n-tab-pane name="command" tab="广播与命令">
+      <n-card title="广播与命令" class="rest-card">
         <div class="command-section">
           <h4>全服广播</h4>
           <div class="input-row">
@@ -263,15 +266,15 @@
             <pre class="pre-block">{{ rawCmdResult }}</pre>
           </n-card>
         </div>
-      </n-tab-pane>
-    </n-tabs>
+      </n-card>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, h, onMounted, reactive, computed, watch } from 'vue'
+import { ref, h, onMounted, reactive, computed } from 'vue'
 import {
-  NTabs, NTabPane, NButton, NSpin, NDataTable, NTag, NAlert, NCard,
+  NButton, NSpin, NDataTable, NTag, NAlert, NCard,
   NInput, NModal, NForm, NFormItem, NSelect, NInputNumber, useDialog
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
@@ -290,7 +293,6 @@ const serversStore = useServersStore()
 
 // ─── State ───
 
-const activeTab = ref('status')
 const restError = ref('')
 const needsRestart = ref(false)
 const setupMessage = ref('')
@@ -319,6 +321,7 @@ const itemCatalogSource = ref('')
 const selectedItemId = ref<number | null>(null)
 const givePlayer = ref('')
 const giveStack = ref(1)
+const itemGiveResult = ref('')
 
 // Bans
 const bansLoading = ref(false)
@@ -385,8 +388,12 @@ const playerOptions = computed(() => players.value
   .map((player: any) => ({ label: player.nickname, value: player.nickname }))
 )
 
+function itemDisplayName(item: TerrariaItem) {
+  return item.zh_name ? `${item.zh_name} / ${item.name}` : item.name
+}
+
 const itemOptions = computed(() => items.value.map((item) => ({
-  label: `#${item.id} ${item.name} (${item.internal_name})`,
+  label: `#${item.id} ${itemDisplayName(item)} (${item.internal_name})`,
   value: item.id,
 })))
 
@@ -398,6 +405,7 @@ const canGiveItem = computed(() => {
 
 const itemColumns: DataTableColumns = [
   { title: 'ID', key: 'id', width: 80 },
+  { title: '中文名', key: 'zh_name', width: 160, render: (row: any) => row.zh_name || '-' },
   { title: '名称', key: 'name', width: 180 },
   { title: '内部名', key: 'internal_name', width: 220 },
   {
@@ -553,6 +561,9 @@ async function loadWorld() {
 function refreshAll() {
   loadStatus()
   loadWorld()
+  loadPlayers()
+  loadBans()
+  loadItems()
 }
 
 // ─── REST Setup ───
@@ -667,13 +678,15 @@ function handleGiveItem() {
     onPositiveClick: async () => {
       itemGiveLoading.value = true
       try {
-        await tshockRestApi.itemGive(props.serverId, {
+        const resp = await tshockRestApi.itemGive(props.serverId, {
           player,
           item_id: item.id,
           stack,
         })
-        notification.success('物品已发放', `${player} <- ${stack} x ${item.name}`)
+        itemGiveResult.value = JSON.stringify(resp.data, null, 2)
+        notification.success('物品已发放', `${player} <- ${stack} x ${itemDisplayName(item)}`)
       } catch (e: any) {
+        itemGiveResult.value = e?.response?.data ? JSON.stringify(e.response.data, null, 2) : ''
         notification.error('发放失败', e?.response?.data?.error || '')
       } finally {
         itemGiveLoading.value = false
@@ -843,12 +856,6 @@ onMounted(async () => {
   refreshAll()
 })
 
-watch(activeTab, (tab) => {
-  if (tab === 'items' && items.value.length === 0 && !itemsLoading.value) {
-    loadItems()
-  }
-})
-
 defineExpose({ refreshAll })
 </script>
 
@@ -878,6 +885,15 @@ defineExpose({ refreshAll })
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.rest-cards {
+  display: grid;
+  gap: 16px;
+}
+
+.rest-card {
+  border: 1px solid var(--border-color);
 }
 
 .stat-item {

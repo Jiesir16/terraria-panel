@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::error::AppError;
@@ -9,6 +10,8 @@ pub struct TerrariaItem {
     pub id: i32,
     pub name: String,
     pub internal_name: String,
+    #[serde(default)]
+    pub zh_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +66,7 @@ fn parse_cargo_items(value: Value) -> Result<Vec<TerrariaItem>, AppError> {
                 id,
                 name,
                 internal_name,
+                zh_name: None,
             });
         }
     }
@@ -70,7 +74,7 @@ fn parse_cargo_items(value: Value) -> Result<Vec<TerrariaItem>, AppError> {
     Ok(items)
 }
 
-async fn fetch_cargo_chunk(where_clause: &str) -> Result<Vec<TerrariaItem>, AppError> {
+async fn fetch_cargo_chunk(endpoint: &str, where_clause: &str) -> Result<Vec<TerrariaItem>, AppError> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
@@ -83,7 +87,7 @@ async fn fetch_cargo_chunk(where_clause: &str) -> Result<Vec<TerrariaItem>, AppE
         let limit = "500".to_string();
         let offset_value = offset.to_string();
         let response = client
-            .get("https://terraria.wiki.gg/api.php")
+            .get(endpoint)
             .query(&[
                 ("action", "cargoquery"),
                 ("tables", "Items"),
@@ -126,17 +130,21 @@ async fn fetch_cargo_chunk(where_clause: &str) -> Result<Vec<TerrariaItem>, AppE
     Ok(items)
 }
 
-pub async fn download_catalog(data_dir: &Path, version: &str) -> Result<ItemCatalog, AppError> {
+async fn fetch_catalog_from(endpoint: &str) -> Result<Vec<TerrariaItem>, AppError> {
     let mut items = Vec::new();
     items.extend(
-        fetch_cargo_chunk("itemid IS NOT NULL AND itemid <= 4000 AND internalname <> \"None\" AND internalname <> \"\"")
+        fetch_cargo_chunk(endpoint, "itemid IS NOT NULL AND itemid <= 4000 AND internalname <> \"None\" AND internalname <> \"\"")
             .await?,
     );
     items.extend(
-        fetch_cargo_chunk("itemid IS NOT NULL AND itemid > 4000 AND internalname <> \"None\" AND internalname <> \"\"")
+        fetch_cargo_chunk(endpoint, "itemid IS NOT NULL AND itemid > 4000 AND internalname <> \"None\" AND internalname <> \"\"")
             .await?,
     );
+    Ok(items)
+}
 
+pub async fn download_catalog(data_dir: &Path, version: &str) -> Result<ItemCatalog, AppError> {
+    let mut items = fetch_catalog_from("https://terraria.wiki.gg/api.php").await?;
     items.sort_by_key(|item| item.id);
     items.dedup_by_key(|item| item.id);
 
@@ -146,9 +154,30 @@ pub async fn download_catalog(data_dir: &Path, version: &str) -> Result<ItemCata
         ));
     }
 
+    let mut source = "terraria.wiki.gg Cargo Items".to_string();
+    match fetch_catalog_from("https://terraria.wiki.gg/zh/api.php").await {
+        Ok(zh_items) => {
+            let zh_names = zh_items
+                .into_iter()
+                .map(|item| (item.id, item.name))
+                .collect::<HashMap<_, _>>();
+            for item in &mut items {
+                if let Some(zh_name) = zh_names.get(&item.id) {
+                    if !zh_name.is_empty() && zh_name != &item.name {
+                        item.zh_name = Some(zh_name.clone());
+                    }
+                }
+            }
+            source = "terraria.wiki.gg Cargo Items + zh Cargo Items".to_string();
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to download Chinese Terraria item names");
+        }
+    }
+
     let catalog = ItemCatalog {
         version: version.to_string(),
-        source: "terraria.wiki.gg Cargo Items".to_string(),
+        source,
         items,
     };
 
@@ -177,7 +206,9 @@ pub fn load_catalog(data_dir: &Path, version: &str) -> Result<Option<ItemCatalog
 
 pub async fn ensure_catalog(data_dir: &Path, version: &str) -> Result<ItemCatalog, AppError> {
     if let Some(catalog) = load_catalog(data_dir, version)? {
-        return Ok(catalog);
+        if catalog.source.contains("zh Cargo") || catalog.items.iter().any(|item| item.zh_name.is_some()) {
+            return Ok(catalog);
+        }
     }
     download_catalog(data_dir, version).await
 }
@@ -196,6 +227,12 @@ pub fn filter_items(catalog: &ItemCatalog, query: Option<&str>, limit: usize) ->
             item.id.to_string() == query
                 || item.name.to_ascii_lowercase().contains(&query)
                 || item.internal_name.to_ascii_lowercase().contains(&query)
+                || item
+                    .zh_name
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_ascii_lowercase()
+                    .contains(&query)
         })
         .take(limit)
         .cloned()

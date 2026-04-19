@@ -152,6 +152,7 @@ export interface TerrariaItem {
   id: number
   name: string
   internal_name: string
+  zh_name?: string
 }
 
 export interface TerrariaItemListResponse {

@@ -206,6 +206,13 @@ pub async fn rest_item_give(
     let cmd = format!("give {} {} {}", item_arg, quote_tshock_arg(player), stack);
     let client = client_for(&state, &id)?;
     let data = client.server_rawcmd(&cmd).await?;
+    crate::db::log_operation(
+        &state.db,
+        &auth.user_id,
+        "发放物品",
+        Some(&id),
+        Some(&format!("player={}, item={}, stack={}", player, item_arg, stack)),
+    );
 
     Ok(Json(json!({
         "command": cmd,
