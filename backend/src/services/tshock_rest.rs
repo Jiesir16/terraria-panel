@@ -157,7 +157,9 @@ fn inject_token_in_config(
 ) -> Result<(), AppError> {
     let settings = settings_obj_mut(config)?;
     settings.insert("RestApiEnabled".to_string(), Value::Bool(true));
-    settings.insert("RestApiPort".to_string(), Value::Number(7878.into()));
+    if settings.get("RestApiPort").is_none() {
+        settings.insert("RestApiPort".to_string(), Value::Number(7878.into()));
+    }
     tokens_obj_mut(settings).insert(token.to_string(), token_permission_object());
     write_config_json(config_path, config)
 }
@@ -170,7 +172,7 @@ fn ensure_rest_api_enabled(config_path: &Path, config: &mut Value) -> Result<(),
             settings.insert("RestApiEnabled".to_string(), Value::Bool(true));
             changed = true;
         }
-        if settings.get("RestApiPort").and_then(|v| v.as_u64()) != Some(7878) {
+        if settings.get("RestApiPort").is_none() {
             settings.insert("RestApiPort".to_string(), Value::Number(7878.into()));
             changed = true;
         }
@@ -189,7 +191,9 @@ fn fix_legacy_token_format(
 ) -> Result<(), AppError> {
     let settings = settings_obj_mut(config)?;
     settings.insert("RestApiEnabled".to_string(), Value::Bool(true));
-    settings.insert("RestApiPort".to_string(), Value::Number(7878.into()));
+    if settings.get("RestApiPort").is_none() {
+        settings.insert("RestApiPort".to_string(), Value::Number(7878.into()));
+    }
     let tokens = tokens_obj_mut(settings);
     let group = tokens
         .get(token_key)
@@ -320,9 +324,7 @@ pub fn ensure_rest_setup(data_dir: &Path, server_id: &str) -> Result<(bool, Stri
         .unwrap_or(false);
     let rest_port_ok = settings_obj(&config)
         .and_then(|s| s.get("RestApiPort"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(7878)
-        == 7878;
+        .is_some();
     let has_clean_token = first_config_token(&config)
         .map(|(_, legacy)| !legacy)
         .unwrap_or(false);
