@@ -36,17 +36,54 @@ fn open_tshock_db(state: &AppState, server_id: &str) -> Result<Connection, AppEr
         .map_err(|e| AppError::DatabaseError(format!("Failed to open tshock.sqlite: {}", e)))
 }
 
-/// Detect which permissions table exists: "GroupPermissions" or "Permissions"
-fn permissions_table(conn: &Connection) -> &'static str {
+/// Detect which permissions table exists: "GroupPermissions" or "Permissions".
+fn permissions_table(conn: &Connection) -> Option<&'static str> {
     let has_gp: bool = conn
         .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='GroupPermissions'")
         .and_then(|mut s| s.exists([]))
         .unwrap_or(false);
     if has_gp {
-        "GroupPermissions"
-    } else {
-        "Permissions"
+        return Some("GroupPermissions");
     }
+
+    let has_permissions: bool = conn
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='Permissions'")
+        .and_then(|mut s| s.exists([]))
+        .unwrap_or(false);
+    if has_permissions {
+        Some("Permissions")
+    } else {
+        None
+    }
+}
+
+fn groups_has_commands(conn: &Connection) -> bool {
+    let mut stmt = match conn.prepare("PRAGMA table_info(Groups)") {
+        Ok(stmt) => stmt,
+        Err(_) => return false,
+    };
+    let rows = match stmt.query_map([], |row| row.get::<_, String>(1)) {
+        Ok(rows) => rows,
+        Err(_) => return false,
+    };
+
+    let has_commands = rows
+        .filter_map(Result::ok)
+        .any(|name| name.eq_ignore_ascii_case("Commands"));
+    has_commands
+}
+
+fn parse_commands(commands: &str) -> Vec<String> {
+    commands
+        .split(',')
+        .map(|permission| permission.trim())
+        .filter(|permission| !permission.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn serialize_commands(permissions: &[String]) -> String {
+    permissions.join(",")
 }
 
 // ─── User Management ───
@@ -168,19 +205,33 @@ pub async fn get_group(
         })
         .unwrap_or(None);
 
-    // Get permissions
-    let query = format!(
-        "SELECT Permission FROM {} WHERE GroupName = ?1 ORDER BY Permission",
-        perm_table
-    );
-    let mut stmt = conn
-        .prepare(&query)
-        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
-    let permissions = stmt
-        .query_map(params![&group_name], |row| row.get::<_, String>(0))
-        .map_err(|e| AppError::DatabaseError(e.to_string()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+    // Get permissions. Newer schemas use a permissions table; older schemas keep CSV in Groups.Commands.
+    let permissions = if let Some(perm_table) = perm_table {
+        let query = format!(
+            "SELECT Permission FROM {} WHERE GroupName = ?1 ORDER BY Permission",
+            perm_table
+        );
+        let mut stmt = conn
+            .prepare(&query)
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        let rows = stmt.query_map(params![&group_name], |row| row.get::<_, String>(0))
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        rows
+    } else if groups_has_commands(&conn) {
+        let commands: Option<String> = conn
+            .prepare("SELECT Commands FROM Groups WHERE GroupName = ?1")
+            .and_then(|mut s| {
+                s.query_row(params![&group_name], |row| row.get::<_, Option<String>>(0))
+            })
+            .unwrap_or(None);
+        let mut permissions = parse_commands(commands.as_deref().unwrap_or(""));
+        permissions.sort();
+        permissions
+    } else {
+        Vec::new()
+    };
 
     // Get member count
     let member_count: i64 = conn
@@ -297,9 +348,11 @@ pub async fn delete_group(
     }
 
     // Delete permissions
-    let delete_perms = format!("DELETE FROM {} WHERE GroupName = ?1", perm_table);
-    conn.execute(&delete_perms, params![&group_name])
-        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+    if let Some(perm_table) = perm_table {
+        let delete_perms = format!("DELETE FROM {} WHERE GroupName = ?1", perm_table);
+        conn.execute(&delete_perms, params![&group_name])
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+    }
 
     // Delete group
     let affected = conn
@@ -350,29 +403,69 @@ pub async fn add_permission(
     let conn = open_tshock_db(&state, &server_id)?;
     let perm_table = permissions_table(&conn);
 
-    // Check if permission already exists for this group
-    let check_query = format!(
-        "SELECT 1 FROM {} WHERE GroupName = ?1 AND Permission = ?2",
-        perm_table
-    );
-    let exists: bool = conn
-        .prepare(&check_query)
-        .and_then(|mut s| s.exists(params![&group_name, permission]))
+    let group_exists: bool = conn
+        .prepare("SELECT 1 FROM Groups WHERE GroupName = ?1")
+        .and_then(|mut s| s.exists(params![&group_name]))
         .unwrap_or(false);
-
-    if exists {
-        return Err(AppError::Conflict(format!(
-            "Permission '{}' already exists for group '{}'",
-            permission, group_name
+    if !group_exists {
+        return Err(AppError::NotFound(format!(
+            "Group '{}' not found",
+            group_name
         )));
     }
 
-    let insert_query = format!(
-        "INSERT INTO {} (GroupName, Permission) VALUES (?1, ?2)",
-        perm_table
-    );
-    conn.execute(&insert_query, params![&group_name, permission])
+    if let Some(perm_table) = perm_table {
+        // Check if permission already exists for this group
+        let check_query = format!(
+            "SELECT 1 FROM {} WHERE GroupName = ?1 AND Permission = ?2",
+            perm_table
+        );
+        let exists: bool = conn
+            .prepare(&check_query)
+            .and_then(|mut s| s.exists(params![&group_name, permission]))
+            .unwrap_or(false);
+
+        if exists {
+            return Err(AppError::Conflict(format!(
+                "Permission '{}' already exists for group '{}'",
+                permission, group_name
+            )));
+        }
+
+        let insert_query = format!(
+            "INSERT INTO {} (GroupName, Permission) VALUES (?1, ?2)",
+            perm_table
+        );
+        conn.execute(&insert_query, params![&group_name, permission])
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+    } else if groups_has_commands(&conn) {
+        let commands: Option<String> = conn
+            .prepare("SELECT Commands FROM Groups WHERE GroupName = ?1")
+            .and_then(|mut s| {
+                s.query_row(params![&group_name], |row| row.get::<_, Option<String>>(0))
+            })
+            .unwrap_or(None);
+        let mut permissions = parse_commands(commands.as_deref().unwrap_or(""));
+        if permissions.iter().any(|p| p == permission) {
+            return Err(AppError::Conflict(format!(
+                "Permission '{}' already exists for group '{}'",
+                permission, group_name
+            )));
+        }
+        permissions.push(permission.to_string());
+        permissions.sort();
+        permissions.dedup();
+
+        conn.execute(
+            "UPDATE Groups SET Commands = ?1 WHERE GroupName = ?2",
+            params![serialize_commands(&permissions), &group_name],
+        )
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+    } else {
+        return Err(AppError::DatabaseError(
+            "No supported TShock permission storage found".to_string(),
+        ));
+    }
 
     crate::db::log_operation(
         &state.db,
@@ -409,13 +502,37 @@ pub async fn remove_permission(
     let conn = open_tshock_db(&state, &server_id)?;
     let perm_table = permissions_table(&conn);
 
-    let delete_query = format!(
-        "DELETE FROM {} WHERE GroupName = ?1 AND Permission = ?2",
-        perm_table
-    );
-    let affected = conn
-        .execute(&delete_query, params![&group_name, permission])
-        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+    let affected = if let Some(perm_table) = perm_table {
+        let delete_query = format!(
+            "DELETE FROM {} WHERE GroupName = ?1 AND Permission = ?2",
+            perm_table
+        );
+        conn.execute(&delete_query, params![&group_name, permission])
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?
+    } else if groups_has_commands(&conn) {
+        let commands: Option<String> = conn
+            .prepare("SELECT Commands FROM Groups WHERE GroupName = ?1")
+            .and_then(|mut s| {
+                s.query_row(params![&group_name], |row| row.get::<_, Option<String>>(0))
+            })
+            .unwrap_or(None);
+        let mut permissions = parse_commands(commands.as_deref().unwrap_or(""));
+        let before = permissions.len();
+        permissions.retain(|p| p != permission);
+        if permissions.len() == before {
+            0
+        } else {
+            conn.execute(
+                "UPDATE Groups SET Commands = ?1 WHERE GroupName = ?2",
+                params![serialize_commands(&permissions), &group_name],
+            )
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?
+        }
+    } else {
+        return Err(AppError::DatabaseError(
+            "No supported TShock permission storage found".to_string(),
+        ));
+    };
 
     if affected == 0 {
         return Err(AppError::NotFound(format!(

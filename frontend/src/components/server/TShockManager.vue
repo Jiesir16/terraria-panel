@@ -51,7 +51,7 @@
         <n-tab-pane name="groups" tab="组管理">
           <div class="sub-section">
             <div class="sub-header">
-              <span></span>
+              <span class="muted">TShock 组列表来自 tshock.sqlite，新安装的 TShock 默认只包含少量内置组</span>
               <n-button v-if="authStore.isAdmin" size="small" type="primary" @click="showCreateGroup = true">
                 + 新建组
               </n-button>
@@ -138,29 +138,79 @@
       </template>
     </n-modal>
 
-    <!-- Permission Editor -->
-    <n-modal v-model:show="showPermEditor" preset="dialog" :title="`组「${editingGroupName}」的权限`" style="width: 640px;">
-      <div style="padding: 8px 0;">
-        <n-spin :show="permLoading">
-          <div v-if="editingGroupPerms.length === 0" class="empty-note">该组暂无权限</div>
-          <div v-else class="perm-list">
-            <div v-for="perm in editingGroupPerms" :key="perm" class="perm-item">
-              <code>{{ perm }}</code>
-              <n-button v-if="authStore.isAdmin" text type="error" size="small" @click="handleRemovePerm(perm)">
-                移除
-              </n-button>
-            </div>
+    <!-- Permission Tree Editor -->
+    <n-modal v-model:show="showPermEditor" preset="card" :title="`编辑组「${editingGroupName}」的权限`" style="width: 720px; max-width: 95vw;" :segmented="{ content: true, footer: true }">
+      <n-spin :show="permLoading || permSaving">
+        <!-- Search / filter -->
+        <n-input
+          v-model:value="permSearchText"
+          placeholder="搜索权限节点..."
+          clearable
+          size="small"
+          style="margin-bottom: 12px;"
+        />
+
+        <!-- Permission stats -->
+        <div class="perm-stats">
+          <n-tag size="small" type="success">已选 {{ checkedPermKeys.length }} 项</n-tag>
+          <n-tag size="small">共 {{ allLeafCount }} 项可选</n-tag>
+          <span v-if="authStore.isAdmin" class="muted" style="margin-left: 8px;">勾选后立即保存</span>
+          <span v-if="extraPerms.length > 0" class="muted" style="margin-left: 8px;">
+            + {{ extraPerms.length }} 项自定义/插件权限
+          </span>
+        </div>
+
+        <!-- The tree -->
+        <div class="perm-tree-container">
+          <n-tree
+            :data="filteredTreeData"
+            :checked-keys="checkedPermKeys"
+            :expanded-keys="expandedKeys"
+            checkable
+            selectable
+            cascade
+            :check-on-click="authStore.isAdmin"
+            :disabled="!authStore.isAdmin"
+            key-field="key"
+            label-field="label"
+            children-field="children"
+            block-line
+            virtual-scroll
+            style="max-height: 420px;"
+            @update:checked-keys="handleTreeCheck"
+            @update:expanded-keys="handleTreeExpand"
+          />
+        </div>
+
+        <!-- Extra / custom permissions (not in the tree) -->
+        <div v-if="extraPerms.length > 0" class="extra-perms">
+          <div class="extra-perms-title">自定义 / 插件权限（不在标准权限树中）</div>
+          <div class="perm-tag-list">
+            <n-tag
+              v-for="perm in extraPerms"
+              :key="perm"
+              size="small"
+              :closable="authStore.isAdmin"
+              @close="handleRemoveExtraPerm(perm)"
+            >
+              {{ perm }}
+            </n-tag>
           </div>
-          <div v-if="authStore.isAdmin" class="perm-add" style="margin-top: 12px;">
-            <n-input-group>
-              <n-input v-model:value="newPermission" placeholder="输入权限节点，如 tshock.admin.kick" @keydown.enter="handleAddPerm" />
-              <n-button type="primary" @click="handleAddPerm" :disabled="!newPermission.trim()">添加</n-button>
-            </n-input-group>
-          </div>
-        </n-spin>
-      </div>
-      <template #action>
-        <n-button @click="showPermEditor = false">关闭</n-button>
+        </div>
+
+        <!-- Manual add -->
+        <div v-if="authStore.isAdmin" class="perm-add">
+          <n-input-group>
+            <n-input v-model:value="newPermission" placeholder="手动添加权限节点（插件权限等）" size="small" @keydown.enter="handleAddCustomPerm" />
+            <n-button type="primary" size="small" @click="handleAddCustomPerm" :disabled="!newPermission.trim()">添加</n-button>
+          </n-input-group>
+        </div>
+      </n-spin>
+
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 8px;">
+          <n-button @click="showPermEditor = false">关闭</n-button>
+        </div>
       </template>
     </n-modal>
 
@@ -190,11 +240,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, h } from 'vue'
+import { ref, computed, onMounted, h, watch } from 'vue'
 import {
   NButton, NTag, NDataTable, NModal, NSelect, NInput, NInputGroup,
-  NTabs, NTabPane, NAlert, NSpin, NFormItem, useDialog,
-  type DataTableColumns
+  NTabs, NTabPane, NAlert, NSpin, NFormItem, NTree, useDialog,
+  type DataTableColumns, type TreeOption
 } from 'naive-ui'
 import { useAuthStore } from '../../stores/auth'
 import { useNotification } from '../../composables/useNotification'
@@ -206,6 +256,11 @@ import {
   type TShockSscCharacterSummary,
   type TShockSscCharacter,
 } from '../../api/server'
+import {
+  TSHOCK_PERMISSION_TREE,
+  ALL_PERMISSION_KEYS,
+  type PermissionNode,
+} from '../../constants/tshockPermissions'
 
 const props = defineProps<{ serverId: string }>()
 
@@ -235,6 +290,9 @@ const editingGroupName = ref('')
 const editingGroupPerms = ref<string[]>([])
 const permLoading = ref(false)
 const newPermission = ref('')
+const permSearchText = ref('')
+const expandedKeys = ref<string[]>([])
+const permSaving = ref(false)
 
 // ─── SSC ───
 const sscCharacters = ref<TShockSscCharacterSummary[]>([])
@@ -247,6 +305,149 @@ const sscDetailLoading = ref(false)
 const groupOptions = computed(() =>
   (overview.value?.groups || []).map(g => ({ label: g.name, value: g.name }))
 )
+
+// ─── Permission Tree Logic ───
+
+const allLeafKeys = new Set(ALL_PERMISSION_KEYS)
+const allLeafCount = ALL_PERMISSION_KEYS.length
+
+/** Currently checked leaf keys (intersection with the tree) */
+const checkedPermKeys = computed(() =>
+  editingGroupPerms.value.filter(p => allLeafKeys.has(p))
+)
+
+/** Permissions that are in the group but NOT in the standard tree (plugin perms etc.) */
+const extraPerms = computed(() =>
+  editingGroupPerms.value.filter(p => !allLeafKeys.has(p)).sort()
+)
+
+/** Convert PermissionNode[] to NTree TreeOption[], with search filtering */
+function toTreeOptions(nodes: PermissionNode[], filter: string): TreeOption[] {
+  const result: TreeOption[] = []
+  for (const node of nodes) {
+    if (node.children && node.children.length > 0) {
+      const children = toTreeOptions(node.children, filter)
+      // If filter active and no children match, skip this branch
+      if (filter && children.length === 0) continue
+      result.push({
+        key: node.key,
+        label: `${node.label}`,
+        children,
+      })
+    } else {
+      // Leaf node — apply filter
+      if (filter && !node.key.includes(filter) && !node.label.includes(filter)) continue
+      result.push({
+        key: node.key,
+        label: `${node.label}  (${node.key})`,
+      })
+    }
+  }
+  return result
+}
+
+const filteredTreeData = computed(() => {
+  const filter = permSearchText.value.trim().toLowerCase()
+  return toTreeOptions(TSHOCK_PERMISSION_TREE, filter)
+})
+
+// Auto-expand all when searching
+watch(permSearchText, (val) => {
+  if (val.trim()) {
+    // Expand all category keys so search results are visible
+    const allCategoryKeys = collectCategoryKeys(TSHOCK_PERMISSION_TREE)
+    expandedKeys.value = allCategoryKeys
+  }
+})
+
+function collectCategoryKeys(nodes: PermissionNode[]): string[] {
+  const keys: string[] = []
+  for (const node of nodes) {
+    if (node.children && node.children.length > 0) {
+      keys.push(node.key)
+      keys.push(...collectCategoryKeys(node.children))
+    }
+  }
+  return keys
+}
+
+function handleTreeExpand(keys: string[]) {
+  expandedKeys.value = keys
+}
+
+/** When user checks/unchecks tree nodes, diff and send API calls */
+async function handleTreeCheck(newCheckedKeys: string[]) {
+  if (!authStore.isAdmin) return
+
+  // Only leaf keys matter
+  const newLeaves = new Set(newCheckedKeys.filter(k => allLeafKeys.has(k)))
+  const oldLeaves = new Set(checkedPermKeys.value)
+
+  const toAdd = [...newLeaves].filter(k => !oldLeaves.has(k))
+  const toRemove = [...oldLeaves].filter(k => !newLeaves.has(k))
+
+  if (toAdd.length === 0 && toRemove.length === 0) return
+
+  permSaving.value = true
+  try {
+    // Execute add/remove in parallel batches
+    const promises: Promise<any>[] = []
+    for (const perm of toAdd) {
+      promises.push(serverApi.addTshockPermission(props.serverId, editingGroupName.value, perm))
+    }
+    for (const perm of toRemove) {
+      promises.push(serverApi.removeTshockPermission(props.serverId, editingGroupName.value, perm))
+    }
+    await Promise.all(promises)
+
+    // Update local state
+    let updated = editingGroupPerms.value.filter(p => !toRemove.includes(p))
+    updated.push(...toAdd)
+    editingGroupPerms.value = updated.sort()
+
+    const msg = []
+    if (toAdd.length > 0) msg.push(`+${toAdd.length}`)
+    if (toRemove.length > 0) msg.push(`-${toRemove.length}`)
+    notification.success('权限已更新', msg.join('  '))
+    loadOverview() // refresh counts
+  } catch (error: any) {
+    notification.error('权限更新失败', error?.response?.data?.error || '部分权限可能未生效，请刷新重试')
+    // Reload from server to get accurate state
+    openPermEditor(editingGroupName.value)
+  } finally {
+    permSaving.value = false
+  }
+}
+
+async function handleRemoveExtraPerm(perm: string) {
+  try {
+    await serverApi.removeTshockPermission(props.serverId, editingGroupName.value, perm)
+    editingGroupPerms.value = editingGroupPerms.value.filter(p => p !== perm)
+    notification.success('权限已移除', perm)
+    loadOverview()
+  } catch (error: any) {
+    notification.error('移除失败', error?.response?.data?.error || '')
+  }
+}
+
+async function handleAddCustomPerm() {
+  const perm = newPermission.value.trim()
+  if (!perm) return
+  if (editingGroupPerms.value.includes(perm)) {
+    notification.error('权限已存在', perm)
+    return
+  }
+  try {
+    await serverApi.addTshockPermission(props.serverId, editingGroupName.value, perm)
+    editingGroupPerms.value.push(perm)
+    editingGroupPerms.value.sort()
+    newPermission.value = ''
+    notification.success('权限已添加', perm)
+    loadOverview()
+  } catch (error: any) {
+    notification.error('添加失败', error?.response?.data?.error || '')
+  }
+}
 
 // ─── Table Columns ───
 
@@ -302,7 +503,7 @@ const groupColumns = computed<DataTableColumns<TShockGroupSummary>>(() => [
     width: 160,
     render(row: TShockGroupSummary) {
       const buttons = [
-        h(NButton, { size: 'small', type: 'primary', text: true, onClick: () => openPermEditor(row.name) }, { default: () => '查看权限' }),
+        h(NButton, { size: 'small', type: 'primary', text: true, onClick: () => openPermEditor(row.name) }, { default: () => '编辑权限' }),
       ]
       if (authStore.isAdmin && !['superadmin', 'owner', 'guest', 'default'].includes(row.name.toLowerCase())) {
         buttons.push(
@@ -349,7 +550,6 @@ async function loadSscCharacters() {
     const response = await serverApi.listSscCharacters(props.serverId)
     sscCharacters.value = response.data
   } catch (error: any) {
-    // Silently handle if SSC not available
     sscCharacters.value = []
   } finally {
     sscLoading.value = false
@@ -445,7 +645,9 @@ async function openPermEditor(groupName: string) {
   editingGroupName.value = groupName
   showPermEditor.value = true
   permLoading.value = true
+  permSearchText.value = ''
   newPermission.value = ''
+  expandedKeys.value = []
   try {
     const response = await serverApi.getTshockGroup(props.serverId, groupName)
     editingGroupPerms.value = response.data.permissions
@@ -454,32 +656,6 @@ async function openPermEditor(groupName: string) {
     editingGroupPerms.value = []
   } finally {
     permLoading.value = false
-  }
-}
-
-async function handleAddPerm() {
-  const perm = newPermission.value.trim()
-  if (!perm) return
-  try {
-    await serverApi.addTshockPermission(props.serverId, editingGroupName.value, perm)
-    editingGroupPerms.value.push(perm)
-    editingGroupPerms.value.sort()
-    newPermission.value = ''
-    notification.success('权限已添加', perm)
-    loadOverview() // refresh counts
-  } catch (error: any) {
-    notification.error('添加失败', error?.response?.data?.error || '')
-  }
-}
-
-async function handleRemovePerm(perm: string) {
-  try {
-    await serverApi.removeTshockPermission(props.serverId, editingGroupName.value, perm)
-    editingGroupPerms.value = editingGroupPerms.value.filter(p => p !== perm)
-    notification.success('权限已移除', perm)
-    loadOverview()
-  } catch (error: any) {
-    notification.error('移除失败', error?.response?.data?.error || '')
   }
 }
 
@@ -577,27 +753,42 @@ defineExpose({ loadAll })
   margin-bottom: 12px;
 }
 
-.perm-list {
+.perm-stats {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 400px;
-  overflow-y: auto;
-}
-
-.perm-item {
-  display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: var(--bg-body);
-  border: 1px solid var(--border-color);
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
-.perm-item code {
+.perm-tree-container {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--bg-body);
+}
+
+.extra-perms {
+  margin-top: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--bg-body);
+}
+
+.extra-perms-title {
   font-size: 13px;
-  color: var(--text-primary);
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.perm-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.perm-add {
+  margin-top: 12px;
 }
 
 .ssc-detail {

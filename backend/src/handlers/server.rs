@@ -92,6 +92,30 @@ async fn wait_for_server_ready(
     }
 }
 
+fn split_tshock_commands(commands: &str) -> Vec<String> {
+    commands
+        .split(',')
+        .map(|permission| permission.trim())
+        .filter(|permission| !permission.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn sqlite_table_has_column(conn: &Connection, table: &str, column: &str) -> bool {
+    let query = format!("PRAGMA table_info({})", table);
+    let Ok(mut stmt) = conn.prepare(&query) else {
+        return false;
+    };
+    let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) else {
+        return false;
+    };
+
+    let has_column = rows
+        .filter_map(Result::ok)
+        .any(|name| name.eq_ignore_ascii_case(column));
+    has_column
+}
+
 fn is_world_file_name(name: &str) -> bool {
     name.ends_with(".wld") || name.ends_with(".wld.bak") || name.ends_with(".bak")
 }
@@ -542,7 +566,28 @@ fn load_tshock_security_overview(
             .insert(permission);
     }
 
-    if table_names.contains("Groups") {
+    if table_names.contains("Groups") && sqlite_table_has_column(&conn, "Groups", "Commands") {
+        let mut stmt = conn
+            .prepare("SELECT GroupName, Commands FROM Groups ORDER BY GroupName")
+            .map_err(|e| AppError::DatabaseError(format!("Failed to query Groups table: {}", e)))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1).unwrap_or(None),
+                ))
+            })
+            .map_err(|e| AppError::DatabaseError(format!("Failed to read Groups rows: {}", e)))?;
+        let group_rows = rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
+            AppError::DatabaseError(format!("Failed to collect Groups rows: {}", e))
+        })?;
+        for (group_name, commands) in group_rows {
+            let permissions = group_permissions.entry(group_name).or_default();
+            for permission in split_tshock_commands(commands.as_deref().unwrap_or("")) {
+                permissions.insert(permission);
+            }
+        }
+    } else if table_names.contains("Groups") {
         let mut stmt = conn
             .prepare("SELECT GroupName FROM Groups ORDER BY GroupName")
             .map_err(|e| AppError::DatabaseError(format!("Failed to query Groups table: {}", e)))?;
