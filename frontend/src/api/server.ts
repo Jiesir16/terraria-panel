@@ -97,10 +97,13 @@ export interface TShockUserAccount {
 
 export interface TShockGroupSummary {
   name: string
+  parent?: string
   permission_count: number
+  permissions: string[]
   ignores_ssc: boolean
   is_registration_group: boolean
   is_guest_group: boolean
+  source: string
 }
 
 export interface TShockSecurityOverview {
@@ -118,6 +121,7 @@ export interface TShockGroupDetail {
   parent?: string
   permissions: string[]
   member_count: number
+  source: string
 }
 
 export interface TShockSscCharacterSummary {

@@ -4,7 +4,7 @@ use axum::{
 };
 use chrono::Utc;
 use rusqlite::{params, Connection};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::{
     auth::Auth,
@@ -13,6 +13,7 @@ use crate::{
     models::{
         TShockGroupDetail, TShockSscCharacter, TShockSscCharacterSummary,
     },
+    services::tshock_rest::TShockRestClient,
 };
 
 /// Open the tshock.sqlite database for a given server.
@@ -84,6 +85,110 @@ fn parse_commands(commands: &str) -> Vec<String> {
 
 fn serialize_commands(permissions: &[String]) -> String {
     permissions.join(",")
+}
+
+fn push_csv_tokens(target: &mut Vec<String>, text: &str) {
+    for token in text.split(|c| matches!(c, ',' | '\n' | '\r')) {
+        let token = token
+            .trim()
+            .trim_matches(|c| matches!(c, '"' | '\'' | '[' | ']' | '{' | '}'));
+        let token = if let Some((label, rest)) = token.split_once(':') {
+            let label = label.trim().to_ascii_lowercase();
+            if matches!(label.as_str(), "permissions" | "commands" | "groups") {
+                rest.trim()
+            } else {
+                token
+            }
+        } else {
+            token
+        };
+        if token.is_empty() {
+            continue;
+        }
+        let lower = token.to_ascii_lowercase();
+        if lower.starts_with("server executed")
+            || lower.starts_with("permissions")
+            || lower.starts_with("commands")
+        {
+            continue;
+        }
+        target.push(token.to_string());
+    }
+}
+
+fn find_value_case_insensitive<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {
+    let obj = value.as_object()?;
+    for (key, child) in obj {
+        if keys.iter().any(|expected| key.eq_ignore_ascii_case(expected)) {
+            return Some(child);
+        }
+    }
+    for child in obj.values() {
+        if let Some(found) = find_value_case_insensitive(child, keys) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn rest_group_parent(value: &Value) -> Option<String> {
+    find_value_case_insensitive(value, &["parent"])
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToString::to_string)
+}
+
+fn rest_group_permissions(value: &Value) -> Vec<String> {
+    let mut permissions = Vec::new();
+    if let Some(perms) = find_value_case_insensitive(value, &["permissions", "commands"]) {
+        match perms {
+            Value::Array(items) => {
+                for item in items {
+                    if let Some(text) = item.as_str() {
+                        push_csv_tokens(&mut permissions, text);
+                    }
+                }
+            }
+            Value::String(text) => push_csv_tokens(&mut permissions, text),
+            _ => {}
+        }
+    }
+    if let Some(perms) = find_value_case_insensitive(value, &["negatedpermissions"]) {
+        let mut negated = Vec::new();
+        match perms {
+            Value::Array(items) => {
+                for item in items {
+                    if let Some(text) = item.as_str() {
+                        push_csv_tokens(&mut negated, text);
+                    }
+                }
+            }
+            Value::String(text) => push_csv_tokens(&mut negated, text),
+            _ => {}
+        }
+        for permission in negated {
+            permissions.push(format!("!{}", permission.trim_start_matches('!')));
+        }
+    }
+    if permissions.is_empty() {
+        if let Some(perms) = find_value_case_insensitive(value, &["totalpermissions"]) {
+            match perms {
+                Value::Array(items) => {
+                    for item in items {
+                        if let Some(text) = item.as_str() {
+                            push_csv_tokens(&mut permissions, text);
+                        }
+                    }
+                }
+                Value::String(text) => push_csv_tokens(&mut permissions, text),
+                _ => {}
+            }
+        }
+    }
+    permissions.sort();
+    permissions.dedup();
+    permissions
 }
 
 // ─── User Management ───
@@ -194,6 +299,39 @@ pub async fn get_group(
         ));
     }
 
+    if let Ok(client) = TShockRestClient::for_server(&state.config.server.data_dir, &server_id) {
+        match client.group_read(&group_name).await {
+            Ok(value) => {
+                let permissions = rest_group_permissions(&value);
+                let parent = rest_group_parent(&value);
+                let member_count = open_tshock_db(&state, &server_id)
+                    .ok()
+                    .and_then(|conn| {
+                        conn.prepare("SELECT COUNT(*) FROM Users WHERE Usergroup = ?1")
+                            .and_then(|mut s| s.query_row(params![&group_name], |row| row.get::<_, i64>(0)))
+                            .ok()
+                    })
+                    .unwrap_or(0);
+
+                return Ok(Json(TShockGroupDetail {
+                    name: group_name,
+                    parent,
+                    permissions,
+                    member_count: member_count as usize,
+                    source: "rest".to_string(),
+                }));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    server_id = %server_id,
+                    group = %group_name,
+                    error = %error,
+                    "Falling back to tshock.sqlite for group detail"
+                );
+            }
+        }
+    }
+
     let conn = open_tshock_db(&state, &server_id)?;
     let perm_table = permissions_table(&conn);
 
@@ -244,6 +382,7 @@ pub async fn get_group(
         parent,
         permissions,
         member_count: member_count as usize,
+        source: "sqlite".to_string(),
     }))
 }
 

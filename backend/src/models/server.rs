@@ -95,10 +95,13 @@ pub struct TShockUserAccount {
 #[derive(Debug, Serialize)]
 pub struct TShockGroupSummary {
     pub name: String,
+    pub parent: Option<String>,
     pub permission_count: usize,
+    pub permissions: Vec<String>,
     pub ignores_ssc: bool,
     pub is_registration_group: bool,
     pub is_guest_group: bool,
+    pub source: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -118,6 +121,7 @@ pub struct TShockGroupDetail {
     pub parent: Option<String>,
     pub permissions: Vec<String>,
     pub member_count: usize,
+    pub source: String,
 }
 
 #[derive(Debug, Serialize)]

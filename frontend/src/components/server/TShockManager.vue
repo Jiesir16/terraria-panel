@@ -51,7 +51,7 @@
         <n-tab-pane name="groups" tab="组管理">
           <div class="sub-section">
             <div class="sub-header">
-              <span class="muted">TShock 组列表来自 tshock.sqlite，新安装的 TShock 默认只包含少量内置组</span>
+              <span class="muted">TShock 组列表优先来自 REST 运行时；REST 不可用时退回 tshock.sqlite</span>
               <n-button v-if="authStore.isAdmin" size="small" type="primary" @click="showCreateGroup = true">
                 + 新建组
               </n-button>
@@ -266,6 +266,7 @@ import {
   type TShockSscCharacterSummary,
   type TShockSscCharacter,
 } from '../../api/server'
+import { tshockRestApi } from '../../api/tshockRest'
 import {
   TSHOCK_PERMISSION_TREE,
   ALL_PERMISSION_KEYS,
@@ -433,14 +434,12 @@ async function savePermissionChanges() {
 
   permSaving.value = true
   try {
-    const promises: Promise<any>[] = []
-    for (const permission of toAdd) {
-      promises.push(serverApi.addTshockPermission(props.serverId, editingGroupName.value, permission))
-    }
-    for (const permission of toRemove) {
-      promises.push(serverApi.removeTshockPermission(props.serverId, editingGroupName.value, permission))
-    }
-    await Promise.all(promises)
+    await tshockRestApi.groupUpdate(
+      props.serverId,
+      editingGroupName.value,
+      undefined,
+      current.join(',')
+    )
 
     originalGroupPerms.value = current
     editingGroupPerms.value = current
@@ -508,14 +507,39 @@ const userColumns = computed<DataTableColumns<TShockUserAccount>>(() => [
   }] as DataTableColumns<TShockUserAccount> : []),
 ])
 
+function groupRestUrl(name: string) {
+  return `/api/servers/${props.serverId}/rest/groups/${encodeURIComponent(name)}`
+}
+
 const groupColumns = computed<DataTableColumns<TShockGroupSummary>>(() => [
   { title: '组名', key: 'name', sorter: 'default' },
+  { title: '父组', key: 'parent', render(row) { return row.parent || '-' } },
   { title: '权限数', key: 'permission_count', sorter: 'default' },
+  {
+    title: '权限预览',
+    key: 'permissions',
+    ellipsis: { tooltip: true },
+    render(row) {
+      const permissions = row.permissions || []
+      if (permissions.length === 0) return '无'
+      const preview = permissions.slice(0, 8).join(', ')
+      return permissions.length > 8 ? `${preview} ...` : preview
+    }
+  },
+  {
+    title: 'REST URL',
+    key: 'url',
+    ellipsis: { tooltip: true },
+    render(row) {
+      return h('code', { class: 'url-code' }, groupRestUrl(row.name))
+    }
+  },
   {
     title: '标签',
     key: 'tags',
     render(row) {
       const tags = []
+      tags.push(h(NTag, { size: 'small', type: row.source === 'rest' ? 'success' : 'warning' }, { default: () => row.source === 'rest' ? 'REST' : 'SQLite' }))
       if (row.is_registration_group) tags.push(h(NTag, { size: 'small', type: 'info' }, { default: () => '默认注册组' }))
       if (row.is_guest_group) tags.push(h(NTag, { size: 'small' }, { default: () => '默认游客组' }))
       if (row.ignores_ssc) tags.push(h(NTag, { size: 'small', type: 'warning' }, { default: () => '含 tshock.ignore.ssc' }))
@@ -598,7 +622,7 @@ async function confirmChangeGroup() {
   if (!selectedGroup.value) return
   changingGroup.value = true
   try {
-    await serverApi.updateTshockUserGroup(props.serverId, editingUser.value, selectedGroup.value)
+    await tshockRestApi.userUpdate(props.serverId, editingUser.value, undefined, selectedGroup.value)
     notification.success('用户组已更新', `${editingUser.value} → ${selectedGroup.value}`)
     showChangeGroup.value = false
     loadOverview()
@@ -617,7 +641,7 @@ function confirmDeleteUser(username: string) {
     negativeText: '取消',
     onPositiveClick: async () => {
       try {
-        await serverApi.deleteTshockUser(props.serverId, username)
+        await tshockRestApi.userDestroy(props.serverId, username)
         notification.success('用户已删除', username)
         loadOverview()
       } catch (error: any) {
@@ -633,7 +657,7 @@ async function confirmCreateGroup() {
   if (!newGroupName.value.trim()) return
   creatingGroup.value = true
   try {
-    await serverApi.createTshockGroup(props.serverId, newGroupName.value.trim(), newGroupParent.value || undefined)
+    await tshockRestApi.groupCreate(props.serverId, newGroupName.value.trim(), newGroupParent.value || undefined)
     notification.success('组已创建', newGroupName.value)
     showCreateGroup.value = false
     newGroupName.value = ''
@@ -654,7 +678,7 @@ function confirmDeleteGroup(name: string) {
     negativeText: '取消',
     onPositiveClick: async () => {
       try {
-        await serverApi.deleteTshockGroup(props.serverId, name)
+        await tshockRestApi.groupDestroy(props.serverId, name)
         notification.success('组已删除', name)
         loadOverview()
       } catch (error: any) {
@@ -829,6 +853,12 @@ defineExpose({ loadAll })
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.url-code {
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-all;
 }
 
 .muted,

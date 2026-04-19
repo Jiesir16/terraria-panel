@@ -4,7 +4,7 @@ use axum::{
 };
 use chrono::Utc;
 use rusqlite::{params, Connection};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
@@ -16,6 +16,7 @@ use crate::{
         CommandRequest, CreateServerRequest, Server, ServerConfig, ServerDetail, SscConfig,
         TShockGroupSummary, TShockSecurityOverview, TShockUserAccount, UpdateServerRequest,
     },
+    services::tshock_rest::TShockRestClient,
 };
 
 #[cfg(target_os = "linux")]
@@ -99,6 +100,193 @@ fn split_tshock_commands(commands: &str) -> Vec<String> {
         .filter(|permission| !permission.is_empty())
         .map(ToString::to_string)
         .collect()
+}
+
+fn push_csv_tokens(target: &mut BTreeSet<String>, text: &str) {
+    for token in text.split(|c| matches!(c, ',' | '\n' | '\r')) {
+        let token = token
+            .trim()
+            .trim_matches(|c| matches!(c, '"' | '\'' | '[' | ']' | '{' | '}'));
+        let token = if let Some((label, rest)) = token.split_once(':') {
+            let label = label.trim().to_ascii_lowercase();
+            if matches!(label.as_str(), "permissions" | "commands" | "groups") {
+                rest.trim()
+            } else {
+                token
+            }
+        } else {
+            token
+        };
+        if token.is_empty() {
+            continue;
+        }
+        let lower = token.to_ascii_lowercase();
+        if lower.starts_with("server executed")
+            || lower.starts_with("groups (")
+            || lower.starts_with("permissions")
+            || lower.starts_with("commands")
+        {
+            continue;
+        }
+        target.insert(token.to_string());
+    }
+}
+
+fn push_group_names_from_value(target: &mut BTreeSet<String>, value: &Value) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                match item {
+                    Value::String(text) => push_csv_tokens(target, text),
+                    Value::Object(obj) => {
+                        for key in ["name", "Name", "group", "Group", "GroupName", "groupname"] {
+                            if let Some(name) = obj.get(key).and_then(|v| v.as_str()) {
+                                push_csv_tokens(target, name);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Value::String(text) => push_csv_tokens(target, text),
+        Value::Object(obj) => {
+            for key in ["groups", "Groups", "response", "Response"] {
+                if let Some(child) = obj.get(key) {
+                    push_group_names_from_value(target, child);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn rest_group_names(value: &Value) -> Vec<String> {
+    let mut names = BTreeSet::new();
+    push_group_names_from_value(&mut names, value);
+    names.into_iter().collect()
+}
+
+fn find_value_case_insensitive<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {
+    let obj = value.as_object()?;
+    for (key, child) in obj {
+        if keys.iter().any(|expected| key.eq_ignore_ascii_case(expected)) {
+            return Some(child);
+        }
+    }
+    for child in obj.values() {
+        if let Some(found) = find_value_case_insensitive(child, keys) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn rest_group_parent(value: &Value) -> Option<String> {
+    find_value_case_insensitive(value, &["parent"])
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToString::to_string)
+}
+
+fn rest_group_permissions(value: &Value) -> Vec<String> {
+    let mut permissions = BTreeSet::new();
+    if let Some(perms) = find_value_case_insensitive(value, &["permissions", "commands"]) {
+        match perms {
+            Value::Array(items) => {
+                for item in items {
+                    if let Some(text) = item.as_str() {
+                        push_csv_tokens(&mut permissions, text);
+                    }
+                }
+            }
+            Value::String(text) => push_csv_tokens(&mut permissions, text),
+            _ => {}
+        }
+    }
+    if let Some(perms) = find_value_case_insensitive(value, &["negatedpermissions"]) {
+        let mut negated = BTreeSet::new();
+        match perms {
+            Value::Array(items) => {
+                for item in items {
+                    if let Some(text) = item.as_str() {
+                        push_csv_tokens(&mut negated, text);
+                    }
+                }
+            }
+            Value::String(text) => push_csv_tokens(&mut negated, text),
+            _ => {}
+        }
+        for permission in negated {
+            permissions.insert(format!("!{}", permission.trim_start_matches('!')));
+        }
+    }
+    if permissions.is_empty() {
+        if let Some(perms) = find_value_case_insensitive(value, &["totalpermissions"]) {
+            match perms {
+                Value::Array(items) => {
+                    for item in items {
+                        if let Some(text) = item.as_str() {
+                            push_csv_tokens(&mut permissions, text);
+                        }
+                    }
+                }
+                Value::String(text) => push_csv_tokens(&mut permissions, text),
+                _ => {}
+            }
+        }
+    }
+    permissions.into_iter().collect()
+}
+
+async fn load_rest_group_summaries(
+    state: &AppState,
+    server_id: &str,
+    default_registration_group: Option<&str>,
+    default_guest_group: Option<&str>,
+) -> Result<Vec<TShockGroupSummary>, AppError> {
+    let client = TShockRestClient::for_server(&state.config.server.data_dir, server_id)?;
+    let group_list = client.group_list().await?;
+    let group_names = rest_group_names(&group_list);
+    if group_names.is_empty() {
+        return Err(AppError::NotFound(
+            "TShock REST returned no groups".to_string(),
+        ));
+    }
+
+    let mut groups = Vec::with_capacity(group_names.len());
+    for name in group_names {
+        let (parent, permissions) = match client.group_read(&name).await {
+            Ok(value) => (rest_group_parent(&value), rest_group_permissions(&value)),
+            Err(error) => {
+                tracing::warn!(
+                    server_id = %server_id,
+                    group = %name,
+                    error = %error,
+                    "Failed to read TShock group permissions through REST"
+                );
+                (None, Vec::new())
+            }
+        };
+        groups.push(TShockGroupSummary {
+            parent,
+            permission_count: permissions.len(),
+            ignores_ssc: permissions.contains(&"tshock.ignore.ssc".to_string()),
+            is_registration_group: default_registration_group
+                .map(|g| g.eq_ignore_ascii_case(&name))
+                .unwrap_or(false),
+            is_guest_group: default_guest_group
+                .map(|g| g.eq_ignore_ascii_case(&name))
+                .unwrap_or(false),
+            source: "rest".to_string(),
+            name,
+            permissions,
+        });
+    }
+
+    groups.sort_by(|a, b| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase()));
+    Ok(groups)
 }
 
 fn sqlite_table_has_column(conn: &Connection, table: &str, column: &str) -> bool {
@@ -565,6 +753,24 @@ fn load_tshock_security_overview(
             .or_default()
             .insert(permission);
     }
+    let mut group_parents: BTreeMap<String, Option<String>> = BTreeMap::new();
+
+    if table_names.contains("Groups") && sqlite_table_has_column(&conn, "Groups", "Parent") {
+        let mut stmt = conn
+            .prepare("SELECT GroupName, Parent FROM Groups ORDER BY GroupName")
+            .map_err(|e| AppError::DatabaseError(format!("Failed to query Groups table: {}", e)))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1).unwrap_or(None),
+                ))
+            })
+            .map_err(|e| AppError::DatabaseError(format!("Failed to read Groups rows: {}", e)))?;
+        group_parents = rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
+            AppError::DatabaseError(format!("Failed to collect Groups rows: {}", e))
+        })?.into_iter().collect();
+    }
 
     if table_names.contains("Groups") && sqlite_table_has_column(&conn, "Groups", "Commands") {
         let mut stmt = conn
@@ -631,9 +837,11 @@ fn load_tshock_security_overview(
         .into_iter()
         .map(|(name, permissions)| {
             let lower_name = name.to_ascii_lowercase();
+            let permissions = permissions.into_iter().collect::<Vec<_>>();
             TShockGroupSummary {
+                parent: group_parents.remove(&name).flatten(),
                 permission_count: permissions.len(),
-                ignores_ssc: permissions.contains("tshock.ignore.ssc"),
+                ignores_ssc: permissions.contains(&"tshock.ignore.ssc".to_string()),
                 is_registration_group: default_registration_group
                     .as_deref()
                     .map(|g| g.eq_ignore_ascii_case(&name))
@@ -647,6 +855,8 @@ fn load_tshock_security_overview(
                 } else {
                     name
                 },
+                permissions,
+                source: "sqlite".to_string(),
             }
         })
         .collect::<Vec<_>>();
@@ -820,7 +1030,26 @@ pub async fn tshock_security_overview(
 
     // Reuse the server existence check so we return a clean 404 for deleted servers.
     let _ = load_server_detail_from_db(&state, &id)?;
-    let overview = load_tshock_security_overview(&state, &id)?;
+    let mut overview = load_tshock_security_overview(&state, &id)?;
+    match load_rest_group_summaries(
+        &state,
+        &id,
+        overview.default_registration_group.as_deref(),
+        overview.default_guest_group.as_deref(),
+    )
+    .await
+    {
+        Ok(groups) => {
+            overview.groups = groups;
+        }
+        Err(error) => {
+            tracing::warn!(
+                server_id = %id,
+                error = %error,
+                "Falling back to tshock.sqlite for group overview"
+            );
+        }
+    }
     Ok(Json(overview))
 }
 
