@@ -185,10 +185,10 @@
           </div>
         </n-form-item>
 
-        <n-form-item label="禁止未登录建造" path="disable_build">
+        <n-form-item label="全局禁止建造" path="disable_build">
           <div>
-            <n-checkbox v-model:checked="formData.disable_build">未登录的玩家不能建造</n-checkbox>
-            <div class="field-hint">需要玩家通过 /register 和 /login 登录后才能放置/破坏方块。</div>
+            <n-checkbox v-model:checked="formData.disable_build">开启全服硬核禁建（仅最高管理员可无视）</n-checkbox>
+            <div class="field-hint">警告：开启后全服所有普通玩家（含登录完成且有 modify 权限者）均无法建造/破坏。普通生存服请勿勾选此项。</div>
           </div>
         </n-form-item>
 
