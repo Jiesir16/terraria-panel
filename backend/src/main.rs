@@ -225,7 +225,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route(
             "/api/servers/:id/ssc-characters/:account_id",
-            get(handlers::tshock::export_ssc_character),
+            get(handlers::tshock::export_ssc_character)
+                .put(handlers::tshock::update_ssc_character)
+                .delete(handlers::tshock::delete_ssc_character),
         )
         // TShock REST API setup + proxy endpoints
         .route(

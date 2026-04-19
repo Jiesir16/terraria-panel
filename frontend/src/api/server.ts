@@ -152,6 +152,14 @@ export interface TShockSscCharacter extends TShockSscCharacterSummary {
   hide_visuals?: string
 }
 
+export interface UpdateSscCharacterRequest {
+  health?: number
+  max_health?: number
+  mana?: number
+  max_mana?: number
+  quests_completed?: number
+}
+
 export interface TerrariaItem {
   id: number
   name: string
@@ -264,6 +272,12 @@ export const serverApi = {
 
   exportSscCharacter: (id: string, accountId: number) =>
     api.get<TShockSscCharacter>(`/servers/${id}/ssc-characters/${accountId}`),
+
+  updateSscCharacter: (id: string, accountId: number, data: UpdateSscCharacterRequest) =>
+    api.put(`/servers/${id}/ssc-characters/${accountId}`, data),
+
+  deleteSscCharacter: (id: string, accountId: number) =>
+    api.delete(`/servers/${id}/ssc-characters/${accountId}`),
 
   backupSscCharacters: (id: string) =>
     api.post(`/servers/${id}/ssc-characters/backup`)

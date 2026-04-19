@@ -4,6 +4,7 @@ use axum::{
 };
 use chrono::Utc;
 use rusqlite::{params, Connection};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::{
@@ -72,6 +73,37 @@ fn groups_has_commands(conn: &Connection) -> bool {
         .filter_map(Result::ok)
         .any(|name| name.eq_ignore_ascii_case("Commands"));
     has_commands
+}
+
+fn table_has_column(conn: &Connection, table: &str, column: &str) -> bool {
+    let mut stmt = match conn.prepare(&format!("PRAGMA table_info({})", table)) {
+        Ok(stmt) => stmt,
+        Err(_) => return false,
+    };
+    let rows = match stmt.query_map([], |row| row.get::<_, String>(1)) {
+        Ok(rows) => rows,
+        Err(_) => return false,
+    };
+    rows.filter_map(Result::ok)
+        .any(|name| name.eq_ignore_ascii_case(column))
+}
+
+fn users_account_id_column(conn: &Connection) -> &'static str {
+    if table_has_column(conn, "Users", "ID") {
+        "ID"
+    } else if table_has_column(conn, "Users", "UserID") {
+        "UserID"
+    } else {
+        "rowid"
+    }
+}
+
+fn username_for_account(conn: &Connection, account: i64) -> Option<String> {
+    let id_column = users_account_id_column(conn);
+    let query = format!("SELECT Username FROM Users WHERE {} = ?1", id_column);
+    conn.prepare(&query)
+        .and_then(|mut s| s.query_row(params![account], |row| row.get(0)))
+        .ok()
 }
 
 fn parse_commands(commands: &str) -> Vec<String> {
@@ -747,11 +779,7 @@ pub async fn list_ssc_characters(
     let enriched: Vec<TShockSscCharacterSummary> = characters
         .into_iter()
         .map(|mut c| {
-            let username: Option<String> = conn
-                .prepare("SELECT Username FROM Users WHERE rowid = ?1")
-                .and_then(|mut s| s.query_row(params![c.account], |row| row.get(0)))
-                .ok();
-            c.username = username;
+            c.username = username_for_account(&conn, c.account);
             c
         })
         .collect();
@@ -818,12 +846,139 @@ pub async fn export_ssc_character(
 
     // Get username
     let mut character = character;
-    character.username = conn
-        .prepare("SELECT Username FROM Users WHERE rowid = ?1")
-        .and_then(|mut s| s.query_row(params![account_id], |row| row.get(0)))
-        .ok();
+    character.username = username_for_account(&conn, account_id);
 
     Ok(Json(character))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateSscCharacterRequest {
+    pub health: Option<i32>,
+    pub max_health: Option<i32>,
+    pub mana: Option<i32>,
+    pub max_mana: Option<i32>,
+    pub quests_completed: Option<i32>,
+}
+
+fn validate_ssc_stat(name: &str, value: Option<i32>, min: i32, max: i32) -> Result<(), AppError> {
+    if let Some(value) = value {
+        if value < min || value > max {
+            return Err(AppError::BadRequest(format!(
+                "{} must be between {} and {}",
+                name, min, max
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Update editable SSC character stats.
+pub async fn update_ssc_character(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path((server_id, account_id)): Path<(String, i64)>,
+    Json(req): Json<UpdateSscCharacterRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !auth.is_admin() {
+        return Err(AppError::Forbidden(
+            "Only admins can edit SSC characters".to_string(),
+        ));
+    }
+
+    validate_ssc_stat("health", req.health, 1, 9999)?;
+    validate_ssc_stat("max_health", req.max_health, 1, 9999)?;
+    validate_ssc_stat("mana", req.mana, 0, 9999)?;
+    validate_ssc_stat("max_mana", req.max_mana, 0, 9999)?;
+    validate_ssc_stat("quests_completed", req.quests_completed, 0, 9999)?;
+
+    let conn = open_tshock_db(&state, &server_id)?;
+    let has_table: bool = conn
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tsCharacter'")
+        .and_then(|mut s| s.exists([]))
+        .unwrap_or(false);
+    if !has_table {
+        return Err(AppError::NotFound(
+            "No SSC character data found (tsCharacter table missing)".to_string(),
+        ));
+    }
+
+    let affected = conn
+        .execute(
+            "UPDATE tsCharacter
+             SET Health = COALESCE(?1, Health),
+                 MaxHealth = COALESCE(?2, MaxHealth),
+                 Mana = COALESCE(?3, Mana),
+                 MaxMana = COALESCE(?4, MaxMana),
+                 questsCompleted = COALESCE(?5, questsCompleted)
+             WHERE Account = ?6",
+            params![
+                req.health,
+                req.max_health,
+                req.mana,
+                req.max_mana,
+                req.quests_completed,
+                account_id
+            ],
+        )
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+    if affected == 0 {
+        return Err(AppError::NotFound(format!(
+            "SSC character with account {} not found",
+            account_id
+        )));
+    }
+
+    crate::db::log_operation(
+        &state.db,
+        &auth.user_id,
+        "修改SSC角色数据",
+        Some(&server_id),
+        Some(&format!("账号ID: {}", account_id)),
+    );
+
+    Ok(Json(json!({
+        "success": true,
+        "message": format!("SSC character {} updated", account_id)
+    })))
+}
+
+/// Delete a single SSC character row. This does not delete the TShock account.
+pub async fn delete_ssc_character(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path((server_id, account_id)): Path<(String, i64)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !auth.is_admin() {
+        return Err(AppError::Forbidden(
+            "Only admins can delete SSC characters".to_string(),
+        ));
+    }
+
+    let conn = open_tshock_db(&state, &server_id)?;
+    let affected = conn
+        .execute("DELETE FROM tsCharacter WHERE Account = ?1", params![account_id])
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+    if affected == 0 {
+        return Err(AppError::NotFound(format!(
+            "SSC character with account {} not found",
+            account_id
+        )));
+    }
+
+    crate::db::log_operation(
+        &state.db,
+        &auth.user_id,
+        "删除SSC角色数据",
+        Some(&server_id),
+        Some(&format!("账号ID: {}", account_id)),
+    );
+
+    Ok(Json(json!({
+        "success": true,
+        "message": format!("SSC character {} deleted", account_id)
+    })))
 }
 
 /// Backup all SSC characters to a JSON file in the saves directory
@@ -882,8 +1037,9 @@ pub async fn backup_ssc_characters(
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
     // Also grab user mapping
+    let id_column = users_account_id_column(&conn);
     let mut user_stmt = conn
-        .prepare("SELECT rowid, Username, Usergroup FROM Users")
+        .prepare(&format!("SELECT {}, Username, Usergroup FROM Users", id_column))
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
     let users: Vec<serde_json::Value> = user_stmt
         .query_map([], |row| {

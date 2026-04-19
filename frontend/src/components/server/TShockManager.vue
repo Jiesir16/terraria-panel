@@ -34,6 +34,12 @@
         <!-- ─── Users Tab ─── -->
         <n-tab-pane name="users" tab="用户管理">
           <div class="sub-section">
+            <div class="sub-header">
+              <span class="muted">TShock 账号用于 /login 和 SSC 角色数据归属。</span>
+              <n-button v-if="authStore.isAdmin" size="small" type="primary" @click="openCreateAccount">
+                + 新建账号
+              </n-button>
+            </div>
             <div v-if="overview.users.length === 0" class="empty-note">暂无已注册 TShock 用户</div>
             <n-data-table
               v-else
@@ -76,9 +82,14 @@
               <span class="muted">
                 {{ overview.ssc_enabled ? 'SSC 已启用，角色数据存储在服务端' : 'SSC 未启用' }}
               </span>
-              <n-button v-if="authStore.isOperator" size="small" type="warning" @click="handleBackupSsc" :loading="sscBackupLoading">
-                备份所有角色
-              </n-button>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <n-button v-if="authStore.isAdmin" size="small" type="primary" @click="openCreateAccount">
+                  + 新建SSC账号
+                </n-button>
+                <n-button v-if="authStore.isOperator" size="small" type="warning" @click="handleBackupSsc" :loading="sscBackupLoading">
+                  备份所有角色
+                </n-button>
+              </div>
             </div>
             <n-spin :show="sscLoading">
               <div v-if="sscCharacters.length === 0" class="empty-note">暂无 SSC 角色数据</div>
@@ -98,6 +109,36 @@
     </n-spin>
 
     <!-- ─── Modals ─── -->
+
+    <!-- Create / Edit TShock Account -->
+    <n-modal v-model:show="showAccountModal" preset="dialog" :title="accountModalMode === 'create' ? '新建 TShock / SSC 账号' : `编辑账号「${accountForm.username}」`">
+      <div style="padding: 8px 0;">
+        <n-alert type="info" :show-icon="false" style="margin-bottom: 12px;">
+          SSC 角色数据归属于 TShock 账号。新建账号后，玩家仍需要用该账号登录；角色数据会在玩家进入并保存后生成。
+        </n-alert>
+        <n-form-item label="账号名" :show-feedback="false" style="margin-bottom: 12px;">
+          <n-input v-model:value="accountForm.username" :disabled="accountModalMode === 'edit'" placeholder="通常填玩家角色名/登录名" />
+        </n-form-item>
+        <n-form-item :label="accountModalMode === 'create' ? '密码' : '新密码（留空不改）'" :show-feedback="false" style="margin-bottom: 12px;">
+          <n-input v-model:value="accountForm.password" type="password" show-password-on="click" placeholder="输入密码" />
+        </n-form-item>
+        <n-form-item label="所属组" :show-feedback="false">
+          <n-select
+            v-model:value="accountForm.group"
+            :options="groupOptions"
+            placeholder="选择组"
+            clearable
+            filterable
+          />
+        </n-form-item>
+      </div>
+      <template #action>
+        <n-button @click="showAccountModal = false">取消</n-button>
+        <n-button type="primary" :loading="accountSaving" @click="saveAccount">
+          {{ accountModalMode === 'create' ? '创建' : '保存' }}
+        </n-button>
+      </template>
+    </n-modal>
 
     <!-- Change User Group -->
     <n-modal v-model:show="showChangeGroup" preset="dialog" title="修改用户组">
@@ -231,9 +272,23 @@
           <div v-if="sscDetailData" class="ssc-detail">
             <div class="detail-row"><strong>账号 ID：</strong>{{ sscDetailData.account }}</div>
             <div class="detail-row"><strong>用户名：</strong>{{ sscDetailData.username || '未知' }}</div>
-            <div class="detail-row"><strong>生命值：</strong>{{ sscDetailData.health }} / {{ sscDetailData.max_health }}</div>
-            <div class="detail-row"><strong>魔力值：</strong>{{ sscDetailData.mana }} / {{ sscDetailData.max_mana }}</div>
-            <div class="detail-row"><strong>已完成任务：</strong>{{ sscDetailData.quests_completed }}</div>
+            <div class="ssc-edit-grid">
+              <n-form-item label="当前生命" :show-feedback="false">
+                <n-input-number v-model:value="sscEditForm.health" :min="1" :max="9999" />
+              </n-form-item>
+              <n-form-item label="最大生命" :show-feedback="false">
+                <n-input-number v-model:value="sscEditForm.max_health" :min="1" :max="9999" />
+              </n-form-item>
+              <n-form-item label="当前魔力" :show-feedback="false">
+                <n-input-number v-model:value="sscEditForm.mana" :min="0" :max="9999" />
+              </n-form-item>
+              <n-form-item label="最大魔力" :show-feedback="false">
+                <n-input-number v-model:value="sscEditForm.max_mana" :min="0" :max="9999" />
+              </n-form-item>
+              <n-form-item label="渔夫任务" :show-feedback="false">
+                <n-input-number v-model:value="sscEditForm.quests_completed" :min="0" :max="9999" />
+              </n-form-item>
+            </div>
             <div class="detail-row"><strong>出生点：</strong>{{ sscDetailData.spawn_x ?? '-' }}, {{ sscDetailData.spawn_y ?? '-' }}</div>
             <div v-if="sscDetailData.inventory" class="detail-row">
               <strong>背包数据：</strong>
@@ -243,6 +298,8 @@
         </n-spin>
       </div>
       <template #action>
+        <n-button v-if="authStore.isAdmin && sscDetailData" type="error" :loading="sscDeleting" @click="confirmDeleteSscCharacter(sscDetailData.account)">删除角色数据</n-button>
+        <n-button v-if="authStore.isAdmin && sscDetailData" type="primary" :loading="sscSaving" @click="saveSscCharacter">保存角色数据</n-button>
         <n-button @click="showSscDetail = false">关闭</n-button>
       </template>
     </n-modal>
@@ -253,7 +310,7 @@
 import { ref, computed, onMounted, h, watch } from 'vue'
 import {
   NButton, NTag, NDataTable, NModal, NSelect, NInput, NInputGroup,
-  NTabs, NTabPane, NAlert, NSpin, NFormItem, NTree, useDialog,
+  NTabs, NTabPane, NAlert, NSpin, NFormItem, NTree, NInputNumber, useDialog,
   type DataTableColumns, type TreeOption
 } from 'naive-ui'
 import { useAuthStore } from '../../stores/auth'
@@ -289,6 +346,16 @@ const editingUser = ref('')
 const selectedGroup = ref<string | null>(null)
 const changingGroup = ref(false)
 
+// ─── Account editing ───
+const showAccountModal = ref(false)
+const accountModalMode = ref<'create' | 'edit'>('create')
+const accountSaving = ref(false)
+const accountForm = ref({
+  username: '',
+  password: '',
+  group: null as string | null,
+})
+
 // ─── Group editing ───
 const showCreateGroup = ref(false)
 const newGroupName = ref('')
@@ -313,10 +380,67 @@ const sscBackupLoading = ref(false)
 const showSscDetail = ref(false)
 const sscDetailData = ref<TShockSscCharacter | null>(null)
 const sscDetailLoading = ref(false)
+const sscSaving = ref(false)
+const sscDeleting = ref(false)
+const sscEditForm = ref({
+  health: 100,
+  max_health: 100,
+  mana: 20,
+  max_mana: 20,
+  quests_completed: 0,
+})
 
 const groupOptions = computed(() =>
   (overview.value?.groups || []).map(g => ({ label: g.name, value: g.name }))
 )
+
+function flattenPermissionLabels(nodes: PermissionNode[], target = new Map<string, string>()) {
+  for (const node of nodes) {
+    if (node.children?.length) {
+      flattenPermissionLabels(node.children, target)
+    } else {
+      target.set(node.key, node.label)
+    }
+  }
+  return target
+}
+
+const permissionLabels = flattenPermissionLabels(TSHOCK_PERMISSION_TREE)
+
+const groupNameDescriptions: Record<string, string> = {
+  guest: '未注册或未登录玩家进入服务器时使用的游客组，通常只保留聊天、注册、登录等最低权限。',
+  default: '普通注册玩家的默认组，通常用于正式玩家的基础游玩权限。',
+  vip: 'VIP/赞助/可信玩家组，通常继承 default，并额外开放传送、便利命令或活动权限。',
+  'insecure-guest': 'TShock 的受限游客组，通常用于不安全连接、未认证或需要额外限制的访客场景。',
+  newadmin: '新管理员/初级管理组，通常给少量管理命令，但不应等同于全权限。',
+  admin: '管理员组，通常具备踢人、封禁、广播、传送、世界管理等主要管理能力。',
+  trustedadmin: '可信管理员组，通常比 admin 权限更多，接近服主但仍应避免直接给全权限。',
+  owner: '服主组，常由 setup 或面板初始化创建。通常用于长期服主账号，建议明确排除 tshock.ignore.ssc。',
+  superadmin: 'TShock 最高权限组，默认等同全权限。注意：superadmin 通常会绕过 SSC，不适合作为普通游玩账号。',
+}
+
+function describeGroup(row: TShockGroupSummary) {
+  const lower = row.name.toLowerCase()
+  const base = groupNameDescriptions[lower] || '自定义权限组，具体能力由直接权限、否定权限和父组继承共同决定。'
+  const parent = row.parent ? `父组：${row.parent}。` : '无父组。'
+  const capabilities = describePermissions(row.permissions || [])
+  return `${base} ${parent}${capabilities}`
+}
+
+function describePermissions(permissions: string[]) {
+  if (permissions.includes('*')) return '包含 *，等同全权限。'
+  if (permissions.length === 0) return '当前未读取到直接权限，可能完全依赖父组继承。'
+
+  const positive = permissions.filter(p => !p.startsWith('!'))
+  const negative = permissions.filter(p => p.startsWith('!')).map(p => p.slice(1))
+  const labels = positive.slice(0, 5).map(p => permissionLabels.get(p) || p)
+  const blocked = negative.slice(0, 3).map(p => permissionLabels.get(p) || p)
+  const parts = [`直接权限：${labels.join('、')}${positive.length > 5 ? ` 等 ${positive.length} 项` : ''}。`]
+  if (blocked.length > 0) {
+    parts.push(`显式禁用：${blocked.join('、')}${negative.length > 3 ? ` 等 ${negative.length} 项` : ''}。`)
+  }
+  return parts.join('')
+}
 
 // ─── Permission Tree Logic ───
 
@@ -500,6 +624,7 @@ const userColumns = computed<DataTableColumns<TShockUserAccount>>(() => [
     width: 160,
     render(row: TShockUserAccount) {
       return h('div', { style: 'display:flex;gap:6px;' }, [
+        h(NButton, { size: 'small', type: 'primary', text: true, onClick: () => openEditAccount(row) }, { default: () => '编辑' }),
         h(NButton, { size: 'small', type: 'primary', text: true, onClick: () => openChangeGroup(row.username, row.group_name) }, { default: () => '改组' }),
         h(NButton, { size: 'small', type: 'error', text: true, onClick: () => confirmDeleteUser(row.username) }, { default: () => '删除' }),
       ])
@@ -514,6 +639,14 @@ function groupRestUrl(name: string) {
 const groupColumns = computed<DataTableColumns<TShockGroupSummary>>(() => [
   { title: '组名', key: 'name', sorter: 'default' },
   { title: '父组', key: 'parent', render(row) { return row.parent || '-' } },
+  {
+    title: '用途说明',
+    key: 'description',
+    ellipsis: { tooltip: true },
+    render(row) {
+      return describeGroup(row)
+    }
+  },
   { title: '权限数', key: 'permission_count', sorter: 'default' },
   {
     title: '权限预览',
@@ -611,6 +744,57 @@ function loadAll() {
 }
 
 // ─── User Actions ───
+
+function openCreateAccount() {
+  accountModalMode.value = 'create'
+  accountForm.value = {
+    username: '',
+    password: '',
+    group: overview.value?.default_registration_group || 'default',
+  }
+  showAccountModal.value = true
+}
+
+function openEditAccount(row: TShockUserAccount) {
+  accountModalMode.value = 'edit'
+  accountForm.value = {
+    username: row.username,
+    password: '',
+    group: row.group_name || null,
+  }
+  showAccountModal.value = true
+}
+
+async function saveAccount() {
+  const username = accountForm.value.username.trim()
+  const password = accountForm.value.password.trim()
+  const group = accountForm.value.group || undefined
+  if (!username) {
+    notification.error('账号名不能为空', '')
+    return
+  }
+  if (accountModalMode.value === 'create' && !password) {
+    notification.error('密码不能为空', '新建账号必须设置密码')
+    return
+  }
+
+  accountSaving.value = true
+  try {
+    if (accountModalMode.value === 'create') {
+      await tshockRestApi.userCreate(props.serverId, username, password, group)
+      notification.success('账号已创建', username)
+    } else {
+      await tshockRestApi.userUpdate(props.serverId, username, password || undefined, group)
+      notification.success('账号已更新', username)
+    }
+    showAccountModal.value = false
+    await loadOverview()
+  } catch (error: any) {
+    notification.error(accountModalMode.value === 'create' ? '创建账号失败' : '更新账号失败', error?.response?.data?.error || '')
+  } finally {
+    accountSaving.value = false
+  }
+}
 
 function openChangeGroup(username: string, currentGroup?: string) {
   editingUser.value = username
