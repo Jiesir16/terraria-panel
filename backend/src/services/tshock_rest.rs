@@ -5,10 +5,11 @@
 //! to a specific server instance.
 
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
+use uuid::Uuid;
 
 use crate::error::AppError;
 
@@ -41,24 +42,13 @@ pub fn resolve_rest_info(
         .and_then(|v| v.as_object())
         .or_else(|| config.as_object());
 
-    let rest_enabled = settings
-        .and_then(|s| s.get("RestApiEnabled"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    if !rest_enabled {
-        return Err(AppError::BadRequest(
-            "TShock REST API is not enabled. Enable it in server config first.".to_string(),
-        ));
-    }
-
     let rest_port = settings
         .and_then(|s| s.get("RestApiPort"))
         .and_then(|v| v.as_u64())
         .unwrap_or(7878) as u16;
 
-    // TShock generates an application token in the REST config
-    // Try to read from rest-tokens file or config
+    // read_application_token will auto-enable REST API + auto-provision a token
+    // if neither exists yet.
     let token = read_application_token(&config_dir)?;
 
     let base_url = format!("http://127.0.0.1:{}", rest_port);
@@ -67,9 +57,12 @@ pub fn resolve_rest_info(
 
 /// Read the TShock application REST token.
 ///
-/// TShock stores tokens in tshock/config.json under
-/// `Settings.ApplicationRestTokens` (a JSON object mapping token→permissions).
-/// If no application token exists, we look for one in a panel-managed file.
+/// Lookup order:
+/// 1. Panel-managed `panel-rest-token.txt` (fastest, no config parse).
+/// 2. First key in `Settings.ApplicationRestTokens` inside config.json.
+/// 3. **Auto-provision**: generate a new token, inject it into config.json
+///    `ApplicationRestTokens`, and persist it in `panel-rest-token.txt`.
+///    This makes REST "just work" without manual configuration.
 fn read_application_token(config_dir: &Path) -> Result<String, AppError> {
     // 1) Check panel-managed token file first
     let token_file = config_dir.join("panel-rest-token.txt");
@@ -83,33 +76,81 @@ fn read_application_token(config_dir: &Path) -> Result<String, AppError> {
         }
     }
 
-    // 2) Try to extract from TShock config.json ApplicationRestTokens
     let config_path = config_dir.join("config.json");
-    if config_path.exists() {
-        let content = std::fs::read_to_string(&config_path)
-            .map_err(|e| AppError::FileError(e.to_string()))?;
-        if let Ok(config) = serde_json::from_str::<Value>(&content) {
-            let settings = config
-                .get("Settings")
-                .and_then(|v| v.as_object())
-                .or_else(|| config.as_object());
-            if let Some(tokens) = settings
-                .and_then(|s| s.get("ApplicationRestTokens"))
-                .and_then(|v| v.as_object())
-            {
-                // Return the first token that has superadmin-level permissions
-                for (token, _perms) in tokens {
-                    return Ok(token.clone());
-                }
+    if !config_path.exists() {
+        return Err(AppError::NotFound(
+            "TShock config.json not found".to_string(),
+        ));
+    }
+
+    let content = std::fs::read_to_string(&config_path)
+        .map_err(|e| AppError::FileError(e.to_string()))?;
+    let mut config: Value = serde_json::from_str(&content)
+        .map_err(|e| AppError::BadRequest(format!("Invalid config.json: {}", e)))?;
+
+    // 2) Try to extract an existing token from ApplicationRestTokens
+    {
+        let settings = config
+            .get("Settings")
+            .and_then(|v| v.as_object())
+            .or_else(|| config.as_object());
+        if let Some(tokens) = settings
+            .and_then(|s| s.get("ApplicationRestTokens"))
+            .and_then(|v| v.as_object())
+        {
+            for (token, _perms) in tokens {
+                // Persist for fast lookup next time
+                let _ = std::fs::write(&token_file, token.as_bytes());
+                return Ok(token.clone());
             }
         }
     }
 
-    Err(AppError::BadRequest(
-        "No REST API token found. Please set an ApplicationRestToken in TShock config.json, \
-         or create a panel-rest-token.txt file in the server's tshock directory."
-            .to_string(),
-    ))
+    // 3) No token exists — auto-provision one
+    tracing::info!("No REST API token found for server, auto-provisioning one");
+
+    let new_token = Uuid::new_v4().to_string().replace('-', "");
+
+    // Inject into config.json: Settings.ApplicationRestTokens.{token} = "superadmin"
+    if let Some(settings) = config.get_mut("Settings").and_then(|v| v.as_object_mut()) {
+        // Ensure RestApiEnabled is true
+        settings.insert(
+            "RestApiEnabled".to_string(),
+            Value::Bool(true),
+        );
+        // Insert the token
+        let tokens_obj = settings
+            .entry("ApplicationRestTokens")
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if let Some(map) = tokens_obj.as_object_mut() {
+            map.insert(new_token.clone(), Value::String("superadmin".to_string()));
+        }
+    } else if let Some(root) = config.as_object_mut() {
+        // Config has no "Settings" wrapper — write at root level
+        root.insert(
+            "RestApiEnabled".to_string(),
+            Value::Bool(true),
+        );
+        let tokens_obj = root
+            .entry("ApplicationRestTokens")
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if let Some(map) = tokens_obj.as_object_mut() {
+            map.insert(new_token.clone(), Value::String("superadmin".to_string()));
+        }
+    }
+
+    // Write config back
+    let pretty = serde_json::to_string_pretty(&config)
+        .map_err(|e| AppError::FileError(format!("Failed to serialize config.json: {}", e)))?;
+    std::fs::write(&config_path, pretty.as_bytes())
+        .map_err(|e| AppError::FileError(format!("Failed to write config.json: {}", e)))?;
+
+    // Also save to panel-rest-token.txt for fast future lookups
+    let _ = std::fs::write(&token_file, new_token.as_bytes());
+
+    tracing::info!("REST API token provisioned. Server restart may be needed for TShock to pick it up.");
+
+    Ok(new_token)
 }
 
 // ─── REST Client ───
