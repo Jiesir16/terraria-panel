@@ -84,8 +84,9 @@ fn table_has_column(conn: &Connection, table: &str, column: &str) -> bool {
         Ok(rows) => rows,
         Err(_) => return false,
     };
-    rows.filter_map(Result::ok)
-        .any(|name| name.eq_ignore_ascii_case(column))
+    let result = rows.filter_map(Result::ok)
+        .any(|name| name.eq_ignore_ascii_case(column));
+    result
 }
 
 fn users_account_id_column(conn: &Connection) -> &'static str {
