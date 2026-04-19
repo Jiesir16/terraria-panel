@@ -14,12 +14,26 @@ use crate::{
     auth::Auth,
     error::AppError,
     handlers::AppState,
-    services::tshock_rest::TShockRestClient,
+    services::tshock_rest::{self, TShockRestClient},
 };
 
 /// Helper: build a TShockRestClient for a given server id.
 fn client_for(state: &AppState, server_id: &str) -> Result<TShockRestClient, AppError> {
     TShockRestClient::for_server(&state.config.server.data_dir, server_id)
+}
+
+// ─── REST Setup ───
+
+/// Check / auto-provision REST API token for a server.
+/// Returns `{ ready: bool, message: string }`.
+/// If `ready` is false, the server needs a restart.
+pub async fn rest_setup(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    _auth: Auth,
+) -> Result<Json<Value>, AppError> {
+    let (ready, message) = tshock_rest::ensure_rest_setup(&state.config.server.data_dir, &id)?;
+    Ok(Json(json!({ "ready": ready, "message": message })))
 }
 
 // ─── Server endpoints ───

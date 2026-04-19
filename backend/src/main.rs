@@ -219,7 +219,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/servers/:id/ssc-characters/:account_id",
             get(handlers::tshock::export_ssc_character),
         )
-        // TShock REST API proxy endpoints
+        // TShock REST API setup + proxy endpoints
+        .route(
+            "/api/servers/:id/rest/setup",
+            post(handlers::tshock_rest::rest_setup),
+        )
         .route(
             "/api/servers/:id/rest/server/status",
             get(handlers::tshock_rest::rest_server_status),

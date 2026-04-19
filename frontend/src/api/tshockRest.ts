@@ -50,7 +50,16 @@ export interface TShockBan {
 
 const base = (serverId: string) => `/servers/${serverId}/rest`
 
+export interface RestSetupResult {
+  ready: boolean
+  message: string
+}
+
 export const tshockRestApi = {
+  // ── Setup ──
+  setup: (serverId: string) =>
+    api.post<RestSetupResult>(`${base(serverId)}/setup`),
+
   // ── Server ──
   serverStatus: (serverId: string) =>
     api.get<TShockServerStatus>(`${base(serverId)}/server/status`),

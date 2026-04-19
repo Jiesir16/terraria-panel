@@ -5,8 +5,17 @@
       <n-button text type="primary" @click="refreshAll" :loading="statusLoading">刷新</n-button>
     </div>
 
-    <!-- REST API status tip -->
-    <n-alert v-if="restError" type="error" :show-icon="true" style="margin-bottom: 12px;">
+    <!-- REST needs restart banner -->
+    <n-alert v-if="needsRestart" type="warning" :show-icon="true" style="margin-bottom: 12px;">
+      <template #header>REST API Token 已自动配置</template>
+      {{ setupMessage }}
+      <n-button size="small" type="warning" style="margin-left: 12px;" @click="handleRestartForRest" :loading="restartingForRest">
+        立即重启服务器
+      </n-button>
+    </n-alert>
+
+    <!-- REST API error tip -->
+    <n-alert v-if="restError && !needsRestart" type="error" :show-icon="true" style="margin-bottom: 12px;">
       {{ restError }}
     </n-alert>
 
@@ -218,6 +227,7 @@ import type { DataTableColumns } from 'naive-ui'
 import { tshockRestApi } from '../../api/tshockRest'
 import type { TShockRestPlayer, TShockServerStatus, TShockWorldInfo } from '../../api/tshockRest'
 import { useNotification } from '../../composables/useNotification'
+import { useServersStore } from '../../stores/servers'
 
 const props = defineProps<{
   serverId: string
@@ -225,11 +235,15 @@ const props = defineProps<{
 
 const notification = useNotification()
 const dialog = useDialog()
+const serversStore = useServersStore()
 
 // ─── State ───
 
 const activeTab = ref('status')
 const restError = ref('')
+const needsRestart = ref(false)
+const setupMessage = ref('')
+const restartingForRest = ref(false)
 
 // Server status
 const statusLoading = ref(false)
@@ -411,6 +425,49 @@ async function loadWorld() {
 function refreshAll() {
   loadStatus()
   loadWorld()
+}
+
+// ─── REST Setup ───
+
+async function checkRestSetup() {
+  try {
+    const resp = await tshockRestApi.setup(props.serverId)
+    const data = resp.data as any
+    if (!data.ready) {
+      needsRestart.value = true
+      setupMessage.value = data.message || 'REST API Token 已写入配置，需要重启服务器使其生效。'
+    } else {
+      needsRestart.value = false
+      setupMessage.value = ''
+    }
+  } catch (e: any) {
+    // Setup check failed — could be server not started etc, non-fatal
+    traceRestError(e)
+  }
+}
+
+function traceRestError(e: any) {
+  const msg = e?.response?.data?.error || ''
+  if (msg.includes('not found') || msg.includes('config.json')) {
+    restError.value = 'TShock 配置文件不存在，请先启动一次服务器。'
+  }
+}
+
+async function handleRestartForRest() {
+  restartingForRest.value = true
+  try {
+    await serversStore.restartServer(props.serverId)
+    notification.success('服务器正在重启', 'REST API Token 将在重启后生效，请稍后刷新。')
+    needsRestart.value = false
+    // Wait a bit then try to load status
+    setTimeout(() => {
+      refreshAll()
+    }, 8000)
+  } catch (e: any) {
+    notification.error('重启失败', e?.response?.data?.error || '')
+  } finally {
+    restartingForRest.value = false
+  }
 }
 
 // ─── Player actions ───
@@ -624,7 +681,8 @@ async function handleRawcmd() {
 
 // ─── Init ───
 
-onMounted(() => {
+onMounted(async () => {
+  await checkRestSetup()
   refreshAll()
 })
 
