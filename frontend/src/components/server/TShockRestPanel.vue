@@ -288,6 +288,9 @@
             <n-button size="small" type="primary" @click="applySelectedBuff" :disabled="!quickCmdPlayer || !selectedBuffId || quickCmdLoading">
               施加 Buff
             </n-button>
+            <n-button size="small" type="success" @click="applyBuffPack" :disabled="!quickCmdPlayer || quickCmdLoading">
+              一键常用 Buff
+            </n-button>
           </div>
           <p class="hint-text">Buff ID 来源：Terraria 官方 Wiki Buff IDs。下拉内置常用项，也可以直接输入 Wiki 上的任意 Buff ID。</p>
         </div>
@@ -553,6 +556,30 @@ const buffOptions = TERRARIA_BUFFS.map((buff) => ({
   label: `#${buff.id} ${buff.zh} / ${buff.name} (${buff.type})`,
   value: buff.id,
 }))
+
+const ONE_CLICK_BUFF_IDS = [
+  2,   // Regeneration
+  3,   // Swiftness
+  5,   // Ironskin
+  6,   // Mana Regeneration
+  7,   // Magic Power
+  9,   // Spelunker
+  11,  // Shine
+  12,  // Night Owl
+  16,  // Archery
+  17,  // Hunter
+  104, // Mining
+  105, // Heartreach
+  107, // Builder
+  108, // Titan
+  110, // Summoning
+  111, // Dangersense
+  112, // Ammo Reservation
+  113, // Lifeforce
+  114, // Endurance
+  115, // Rage
+  117, // Wrath
+]
 
 function itemDisplayName(item: TerrariaItem) {
   return item.zh_name ? `${item.zh_name} / ${item.name}` : item.name
@@ -960,6 +987,43 @@ function applySelectedBuff() {
     return
   }
   quickCmd(`/gbuff ${quickCmdPlayer.value} ${buffId} ${customBuffDuration.value}`)
+}
+
+async function applyBuffPack() {
+  const player = quickCmdPlayer.value.trim()
+  if (!player) return
+
+  quickCmdLoading.value = true
+  const results: string[] = []
+  let failed = 0
+
+  for (const buffId of ONE_CLICK_BUFF_IDS) {
+    const buff = TERRARIA_BUFFS.find(item => item.id === buffId)
+    const label = buff ? `${buff.zh}/${buff.name}` : `Buff ${buffId}`
+    const cmd = `/gbuff ${player} ${buffId} ${customBuffDuration.value}`
+    try {
+      const resp = await tshockRestApi.serverRawcmd(props.serverId, cmd)
+      const data = resp.data as any
+      const message = restResponseText(data) || JSON.stringify(data, null, 2)
+      if (restBusinessFailed(data)) {
+        failed += 1
+        results.push(`失败 #${buffId} ${label}: ${message}`)
+      } else {
+        results.push(`成功 #${buffId} ${label}: ${message || 'OK'}`)
+      }
+    } catch (e: any) {
+      failed += 1
+      results.push(`失败 #${buffId} ${label}: ${e?.response?.data?.error || e?.message || '请求失败'}`)
+    }
+  }
+
+  quickCmdResult.value = results.join('\n')
+  if (failed > 0) {
+    notification.error('一键 Buff 部分失败', notificationText(`失败 ${failed}/${ONE_CLICK_BUFF_IDS.length} 项，详见命令输出`))
+  } else {
+    notification.success('一键 Buff 已施加', notificationText(`已给 ${player} 施加 ${ONE_CLICK_BUFF_IDS.length} 个常用 Buff`))
+  }
+  quickCmdLoading.value = false
 }
 
 // ─── Ban actions ───
