@@ -143,12 +143,6 @@ const difficultyOptions = [
   { label: '旅途 (Journey)', value: 3 }
 ]
 
-const worldEvilOptions = [
-  { label: '随机 (Random)', value: 0 },
-  { label: '腐化 (Corruption)', value: 1 },
-  { label: '血腥 (Crimson)', value: 2 }
-]
-
 const versionOptions = computed(() =>
   versions.value.map(v => ({
     label: v.name,

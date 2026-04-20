@@ -705,9 +705,15 @@ const sscColumns = computed<DataTableColumns<TShockSscCharacterSummary>>(() => [
   {
     title: '操作',
     key: 'actions',
-    width: 120,
+    width: 180,
     render(row: TShockSscCharacterSummary) {
-      return h(NButton, { size: 'small', type: 'primary', text: true, onClick: () => openSscDetail(row.account) }, { default: () => '查看/导出' })
+      const buttons = [
+        h(NButton, { size: 'small', type: 'primary', text: true, onClick: () => openSscDetail(row.account) }, { default: () => '查看/编辑' }),
+      ]
+      if (authStore.isAdmin) {
+        buttons.push(h(NButton, { size: 'small', type: 'error', text: true, onClick: () => confirmDeleteSscCharacter(row.account) }, { default: () => '删除角色' }))
+      }
+      return h('div', { style: 'display:flex;gap:6px;' }, buttons)
     }
   },
 ])
@@ -904,11 +910,61 @@ async function openSscDetail(accountId: number) {
   try {
     const response = await serverApi.exportSscCharacter(props.serverId, accountId)
     sscDetailData.value = response.data
+    sscEditForm.value = {
+      health: response.data.health,
+      max_health: response.data.max_health,
+      mana: response.data.mana,
+      max_mana: response.data.max_mana,
+      quests_completed: response.data.quests_completed,
+    }
   } catch (error: any) {
     notification.error('加载角色数据失败', error?.response?.data?.error || '')
   } finally {
     sscDetailLoading.value = false
   }
+}
+
+async function saveSscCharacter() {
+  if (!sscDetailData.value) return
+  sscSaving.value = true
+  try {
+    await serverApi.updateSscCharacter(props.serverId, sscDetailData.value.account, {
+      health: sscEditForm.value.health,
+      max_health: sscEditForm.value.max_health,
+      mana: sscEditForm.value.mana,
+      max_mana: sscEditForm.value.max_mana,
+      quests_completed: sscEditForm.value.quests_completed,
+    })
+    notification.success('SSC 角色数据已保存', sscDetailData.value.username || `#${sscDetailData.value.account}`)
+    await openSscDetail(sscDetailData.value.account)
+    await loadSscCharacters()
+  } catch (error: any) {
+    notification.error('保存角色数据失败', error?.response?.data?.error || '')
+  } finally {
+    sscSaving.value = false
+  }
+}
+
+function confirmDeleteSscCharacter(accountId: number) {
+  dialog.error({
+    title: '删除 SSC 角色数据',
+    content: `确定删除账号 ID ${accountId} 的 SSC 角色数据吗？这不会删除 TShock 账号，但会移除该账号保存的服务端角色。建议先备份。`,
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      sscDeleting.value = true
+      try {
+        await serverApi.deleteSscCharacter(props.serverId, accountId)
+        notification.success('SSC 角色数据已删除', `账号 ID: ${accountId}`)
+        showSscDetail.value = false
+        await loadSscCharacters()
+      } catch (error: any) {
+        notification.error('删除角色数据失败', error?.response?.data?.error || '')
+      } finally {
+        sscDeleting.value = false
+      }
+    }
+  })
 }
 
 function downloadSscJson(data: TShockSscCharacter) {
@@ -1031,6 +1087,12 @@ defineExpose({ loadAll })
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.ssc-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
 }
 
 .detail-row {

@@ -279,7 +279,7 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
-import { NSpin, NForm, NFormItem, NInput, NInputNumber, NSelect, NCheckbox, NButton, NDivider, NGrid, NGridItem, NSpace } from 'naive-ui'
+import { NSpin, NForm, NFormItem, NInput, NInputNumber, NSelect, NCheckbox, NButton, NDivider, NSpace } from 'naive-ui'
 import { useAuthStore } from '../../stores/auth'
 import { useServersStore } from '../../stores/servers'
 import { serverApi } from '../../api/server'
@@ -478,6 +478,7 @@ async function loadConfig() {
       world_width: config.world_width || 6400,
       world_height: config.world_height || 1800,
       difficulty: config.difficulty ?? 0,
+      world_evil: config.world_evil ?? 0,
       seed: config.seed || '',
       enable_whitelist: config.enable_whitelist || false,
       pvp_mode: config.pvp_mode || 'normal',

@@ -30,7 +30,7 @@
         <p class="hint-text" style="margin-top: 10px;">
           已接入：server status/broadcast/off/rawcmd/reload/restart、players list/read/kick/ban/kill/mute/unmute、users、groups、bans、world。
         </p>
-        <n-card v-if="tokenTestResult" size="small" title="Token 测试结果">
+        <n-card v-show="tokenTestResult" size="small" title="Token 测试结果">
           <pre class="pre-block">{{ tokenTestResult }}</pre>
         </n-card>
       </n-card>
@@ -80,10 +80,10 @@
           <n-button size="small" @click="loadMotd" :loading="motdLoading">查看 MOTD</n-button>
           <n-button size="small" @click="loadRules" :loading="rulesLoading">查看规则</n-button>
         </div>
-        <n-card v-if="motdText" size="small" style="margin-top: 8px;" title="MOTD">
+        <n-card v-show="motdText" size="small" style="margin-top: 8px;" title="MOTD">
           <pre class="pre-block">{{ motdText }}</pre>
         </n-card>
-        <n-card v-if="rulesText" size="small" style="margin-top: 8px;" title="服务器规则">
+        <n-card v-show="rulesText" size="small" style="margin-top: 8px;" title="服务器规则">
           <pre class="pre-block">{{ rulesText }}</pre>
         </n-card>
       </n-card>
@@ -155,7 +155,7 @@
             striped
           />
         </n-spin>
-        <n-card v-if="itemGiveResult" size="small" style="margin-top: 12px;" title="最近发放结果">
+        <n-card v-show="itemGiveResult" size="small" style="margin-top: 12px;" title="最近发放结果">
           <pre class="pre-block">{{ itemGiveResult }}</pre>
         </n-card>
       </n-card>
@@ -275,7 +275,7 @@
         <div class="quick-cmd-group">
           <h4>玩家模式</h4>
           <div class="world-actions compact">
-            <n-button size="small" type="success" @click="quickCmd('/godmode ' + quickCmdPlayer)" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+            <n-button size="small" type="success" @click="quickCmd('/god ' + quickCmdPlayer)" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
               God 模式 (切换)
             </n-button>
             <n-button size="small" type="info" @click="quickCmd('/heal ' + quickCmdPlayer)" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
@@ -290,35 +290,35 @@
         <div class="quick-cmd-group">
           <h4>增益 Buff</h4>
           <div class="world-actions compact">
-            <n-button size="small" @click="quickCmd('/buff ' + quickCmdPlayer + ' 5 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+            <n-button size="small" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' 5 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
               铁皮 (60分)
             </n-button>
-            <n-button size="small" @click="quickCmd('/buff ' + quickCmdPlayer + ' 1 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+            <n-button size="small" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' 1 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
               黑曜石皮 (60分)
             </n-button>
-            <n-button size="small" @click="quickCmd('/buff ' + quickCmdPlayer + ' 3 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+            <n-button size="small" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' 3 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
               迅捷 (60分)
             </n-button>
-            <n-button size="small" @click="quickCmd('/buff ' + quickCmdPlayer + ' 11 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+            <n-button size="small" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' 11 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
               光芒 (60分)
             </n-button>
-            <n-button size="small" @click="quickCmd('/buff ' + quickCmdPlayer + ' 113 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+            <n-button size="small" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' 113 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
               生命再生 (60分)
             </n-button>
-            <n-button size="small" @click="quickCmd('/buff ' + quickCmdPlayer + ' 114 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+            <n-button size="small" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' 114 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
               魔力再生 (60分)
             </n-button>
-            <n-button size="small" @click="quickCmd('/buff ' + quickCmdPlayer + ' 104 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+            <n-button size="small" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' 104 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
               挖矿增速 (60分)
             </n-button>
-            <n-button size="small" @click="quickCmd('/buff ' + quickCmdPlayer + ' 107 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+            <n-button size="small" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' 107 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
               仙灵 (60分)
             </n-button>
           </div>
           <div class="input-row" style="margin-top: 8px;">
             <n-input-number v-model:value="customBuffId" :min="1" :max="999" placeholder="Buff ID" style="width: 120px;" />
             <n-input-number v-model:value="customBuffDuration" :min="1" :max="86400" placeholder="秒" style="width: 100px;" />
-            <n-button size="small" type="primary" @click="quickCmd('/buff ' + quickCmdPlayer + ' ' + customBuffId + ' ' + customBuffDuration)" :disabled="!quickCmdPlayer || !customBuffId" :loading="quickCmdLoading">
+            <n-button size="small" type="primary" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' ' + customBuffId + ' ' + customBuffDuration)" :disabled="!quickCmdPlayer || !customBuffId" :loading="quickCmdLoading">
               施加自定义 Buff
             </n-button>
           </div>
@@ -365,7 +365,15 @@
             </n-button>
           </div>
           <div class="input-row" style="margin-top: 8px;">
-            <n-input v-model:value="tpTarget" placeholder="传送目标玩家名" style="width: 200px;" />
+            <n-select
+              v-model:value="tpTarget"
+              :options="playerOptions"
+              filterable
+              tag
+              clearable
+              placeholder="传送目标玩家"
+              style="width: 220px;"
+            />
             <n-button size="small" type="info" @click="quickCmd('/tp ' + quickCmdPlayer + ' ' + tpTarget)" :disabled="!quickCmdPlayer || !tpTarget" :loading="quickCmdLoading">
               传送到目标
             </n-button>
@@ -375,23 +383,24 @@
         <div class="quick-cmd-group">
           <h4>Boss 召唤</h4>
           <div class="world-actions compact">
-            <n-button size="small" type="error" @click="quickCmd('/spawnboss eow')" :loading="quickCmdLoading">世界吞噬者</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnboss boc')" :loading="quickCmdLoading">克苏鲁之脑</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnboss eoc')" :loading="quickCmdLoading">克苏鲁之眼</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnboss skeletron')" :loading="quickCmdLoading">骷髅王</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnboss kingslime')" :loading="quickCmdLoading">史莱姆王</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnboss wof')" :loading="quickCmdLoading">血肉墙</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnboss destroyer')" :loading="quickCmdLoading">毁灭者</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnboss prime')" :loading="quickCmdLoading">机械骷髅王</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnboss twins')" :loading="quickCmdLoading">双子魔眼</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnboss plantera')" :loading="quickCmdLoading">世纪之花</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnboss golem')" :loading="quickCmdLoading">石巨人</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnboss lunatic')" :loading="quickCmdLoading">拜月教邪教徒</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnboss moonlord')" :loading="quickCmdLoading">月亮领主</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnmob 13 1')" :loading="quickCmdLoading">世界吞噬者</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnmob 266 1')" :loading="quickCmdLoading">克苏鲁之脑</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnmob 4 1')" :loading="quickCmdLoading">克苏鲁之眼</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnmob 35 1')" :loading="quickCmdLoading">骷髅王</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnmob 50 1')" :loading="quickCmdLoading">史莱姆王</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnmob 113 1')" :loading="quickCmdLoading">血肉墙</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnmob 134 1')" :loading="quickCmdLoading">毁灭者</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnmob 127 1')" :loading="quickCmdLoading">机械骷髅王</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnmob 125 1')" :loading="quickCmdLoading">双子魔眼-激光</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnmob 126 1')" :loading="quickCmdLoading">双子魔眼-魔焰</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnmob 262 1')" :loading="quickCmdLoading">世纪之花</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnmob 245 1')" :loading="quickCmdLoading">石巨人</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnmob 439 1')" :loading="quickCmdLoading">拜月教邪教徒</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnmob 398 1')" :loading="quickCmdLoading">月亮领主</n-button>
           </div>
         </div>
 
-        <n-card v-if="quickCmdResult" size="small" style="margin-top: 12px;" title="命令输出">
+        <n-card v-show="quickCmdResult" size="small" style="margin-top: 12px;" title="命令输出">
           <pre class="pre-block">{{ quickCmdResult }}</pre>
         </n-card>
       </n-card>
@@ -417,7 +426,7 @@
               执行
             </n-button>
           </div>
-          <n-card v-if="rawCmdResult" size="small" style="margin-top: 8px;" title="命令输出">
+          <n-card v-show="rawCmdResult" size="small" style="margin-top: 8px;" title="命令输出">
             <pre class="pre-block">{{ rawCmdResult }}</pre>
           </n-card>
         </div>
@@ -1090,7 +1099,6 @@ async function handleBroadcast() {
 async function handleRawcmd() {
   if (!rawCmd.value.trim()) return
   actionLoading.rawcmd = true
-  rawCmdResult.value = ''
   try {
     const resp = await tshockRestApi.serverRawcmd(props.serverId, rawCmd.value)
     const data = resp.data as any
@@ -1112,7 +1120,6 @@ async function handleRawcmd() {
 async function quickCmd(cmd: string) {
   if (!cmd.trim()) return
   quickCmdLoading.value = true
-  quickCmdResult.value = ''
   try {
     const resp = await tshockRestApi.serverRawcmd(props.serverId, cmd)
     const data = resp.data as any
