@@ -452,7 +452,23 @@ onUnmounted(() => {
 
 .header-actions {
   display: flex;
-  gap: 12px;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+@media (max-width: 768px) {
+  .detail-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
 
 .mods-section,

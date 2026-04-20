@@ -83,6 +83,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         system_monitor,
     };
 
+    // Start auto-backup background task
+    services::auto_backup::spawn_auto_backup(
+        config.clone(),
+        db.clone(),
+        state.save_manager.clone(),
+    );
+
     // Build router
     let app = Router::new()
         // Auth endpoints

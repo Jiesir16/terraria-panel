@@ -1,3 +1,4 @@
+pub mod auto_backup;
 pub mod command_policy;
 pub mod item_catalog;
 pub mod mod_manager;

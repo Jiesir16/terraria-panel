@@ -256,6 +256,146 @@
         </div>
       </n-card>
 
+      <!-- ─── Quick Commands ─── -->
+      <n-card title="快捷命令" class="rest-card">
+        <p class="hint-text">通过 rawcmd 执行常用管理命令，无需进入游戏。可指定目标玩家。</p>
+
+        <div style="margin-bottom: 12px;">
+          <n-select
+            v-model:value="quickCmdPlayer"
+            :options="playerOptions"
+            filterable
+            tag
+            clearable
+            placeholder="目标玩家 (部分命令需要)"
+            style="max-width: 300px;"
+          />
+        </div>
+
+        <div class="quick-cmd-group">
+          <h4>玩家模式</h4>
+          <div class="world-actions compact">
+            <n-button size="small" type="success" @click="quickCmd('/godmode ' + quickCmdPlayer)" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+              God 模式 (切换)
+            </n-button>
+            <n-button size="small" type="info" @click="quickCmd('/heal ' + quickCmdPlayer)" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+              满血满蓝
+            </n-button>
+            <n-button size="small" @click="quickCmd('/slap ' + quickCmdPlayer + ' 0')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+              拍打 (不伤害)
+            </n-button>
+          </div>
+        </div>
+
+        <div class="quick-cmd-group">
+          <h4>增益 Buff</h4>
+          <div class="world-actions compact">
+            <n-button size="small" @click="quickCmd('/buff ' + quickCmdPlayer + ' 5 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+              铁皮 (60分)
+            </n-button>
+            <n-button size="small" @click="quickCmd('/buff ' + quickCmdPlayer + ' 1 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+              黑曜石皮 (60分)
+            </n-button>
+            <n-button size="small" @click="quickCmd('/buff ' + quickCmdPlayer + ' 3 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+              迅捷 (60分)
+            </n-button>
+            <n-button size="small" @click="quickCmd('/buff ' + quickCmdPlayer + ' 11 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+              光芒 (60分)
+            </n-button>
+            <n-button size="small" @click="quickCmd('/buff ' + quickCmdPlayer + ' 113 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+              生命再生 (60分)
+            </n-button>
+            <n-button size="small" @click="quickCmd('/buff ' + quickCmdPlayer + ' 114 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+              魔力再生 (60分)
+            </n-button>
+            <n-button size="small" @click="quickCmd('/buff ' + quickCmdPlayer + ' 104 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+              挖矿增速 (60分)
+            </n-button>
+            <n-button size="small" @click="quickCmd('/buff ' + quickCmdPlayer + ' 107 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+              仙灵 (60分)
+            </n-button>
+          </div>
+          <div class="input-row" style="margin-top: 8px;">
+            <n-input-number v-model:value="customBuffId" :min="1" :max="999" placeholder="Buff ID" style="width: 120px;" />
+            <n-input-number v-model:value="customBuffDuration" :min="1" :max="86400" placeholder="秒" style="width: 100px;" />
+            <n-button size="small" type="primary" @click="quickCmd('/buff ' + quickCmdPlayer + ' ' + customBuffId + ' ' + customBuffDuration)" :disabled="!quickCmdPlayer || !customBuffId" :loading="quickCmdLoading">
+              施加自定义 Buff
+            </n-button>
+          </div>
+        </div>
+
+        <div class="quick-cmd-group">
+          <h4>时间与天气</h4>
+          <div class="world-actions compact">
+            <n-button size="small" @click="quickCmd('/time noon')" :loading="quickCmdLoading">正午</n-button>
+            <n-button size="small" @click="quickCmd('/time midnight')" :loading="quickCmdLoading">午夜</n-button>
+            <n-button size="small" @click="quickCmd('/time dawn')" :loading="quickCmdLoading">黎明</n-button>
+            <n-button size="small" @click="quickCmd('/time dusk')" :loading="quickCmdLoading">黄昏</n-button>
+            <n-button size="small" @click="quickCmd('/rain start')" :loading="quickCmdLoading">开始下雨</n-button>
+            <n-button size="small" @click="quickCmd('/rain stop')" :loading="quickCmdLoading">停止下雨</n-button>
+            <n-button size="small" @click="quickCmd('/wind 0')" :loading="quickCmdLoading">无风</n-button>
+          </div>
+        </div>
+
+        <div class="quick-cmd-group">
+          <h4>世界事件</h4>
+          <div class="world-actions compact">
+            <n-button size="small" type="error" @click="quickCmd('/invade goblin')" :loading="quickCmdLoading">哥布林入侵</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/invade snowman')" :loading="quickCmdLoading">雪人军团</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/invade pirate')" :loading="quickCmdLoading">海盗入侵</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/invade martian')" :loading="quickCmdLoading">火星暴乱</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/invade pumpkinmoon')" :loading="quickCmdLoading">南瓜月</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/invade frostmoon')" :loading="quickCmdLoading">霜月</n-button>
+            <n-button size="small" type="warning" @click="quickCmd('/eclipse')" :loading="quickCmdLoading">日食</n-button>
+            <n-button size="small" @click="quickCmd('/invade stop')" :loading="quickCmdLoading">停止入侵</n-button>
+          </div>
+        </div>
+
+        <div class="quick-cmd-group">
+          <h4>传送</h4>
+          <div class="world-actions compact">
+            <n-button size="small" @click="quickCmd('/home ' + quickCmdPlayer)" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
+              传送回家
+            </n-button>
+            <n-button size="small" @click="quickCmd('/spawn')" :loading="quickCmdLoading">
+              传送出生点
+            </n-button>
+            <n-button size="small" @click="quickCmd('/tpnpc 22')" :loading="quickCmdLoading">
+              传送到向导
+            </n-button>
+          </div>
+          <div class="input-row" style="margin-top: 8px;">
+            <n-input v-model:value="tpTarget" placeholder="传送目标玩家名" style="width: 200px;" />
+            <n-button size="small" type="info" @click="quickCmd('/tp ' + quickCmdPlayer + ' ' + tpTarget)" :disabled="!quickCmdPlayer || !tpTarget" :loading="quickCmdLoading">
+              传送到目标
+            </n-button>
+          </div>
+        </div>
+
+        <div class="quick-cmd-group">
+          <h4>Boss 召唤</h4>
+          <div class="world-actions compact">
+            <n-button size="small" type="error" @click="quickCmd('/spawnboss eow')" :loading="quickCmdLoading">世界吞噬者</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnboss boc')" :loading="quickCmdLoading">克苏鲁之脑</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnboss eoc')" :loading="quickCmdLoading">克苏鲁之眼</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnboss skeletron')" :loading="quickCmdLoading">骷髅王</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnboss kingslime')" :loading="quickCmdLoading">史莱姆王</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnboss wof')" :loading="quickCmdLoading">血肉墙</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnboss destroyer')" :loading="quickCmdLoading">毁灭者</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnboss prime')" :loading="quickCmdLoading">机械骷髅王</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnboss twins')" :loading="quickCmdLoading">双子魔眼</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnboss plantera')" :loading="quickCmdLoading">世纪之花</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnboss golem')" :loading="quickCmdLoading">石巨人</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnboss lunatic')" :loading="quickCmdLoading">拜月教邪教徒</n-button>
+            <n-button size="small" type="error" @click="quickCmd('/spawnboss moonlord')" :loading="quickCmdLoading">月亮领主</n-button>
+          </div>
+        </div>
+
+        <n-card v-if="quickCmdResult" size="small" style="margin-top: 12px;" title="命令输出">
+          <pre class="pre-block">{{ quickCmdResult }}</pre>
+        </n-card>
+      </n-card>
+
       <!-- ─── Broadcast & Raw Command ─── -->
       <n-card title="广播与命令" class="rest-card">
         <div class="command-section">
@@ -354,6 +494,14 @@ const worldInfo = ref<TShockWorldInfo | null>(null)
 const broadcastMsg = ref('')
 const rawCmd = ref('')
 const rawCmdResult = ref('')
+
+// Quick commands
+const quickCmdPlayer = ref('')
+const quickCmdLoading = ref(false)
+const quickCmdResult = ref('')
+const customBuffId = ref<number | null>(null)
+const customBuffDuration = ref(3600)
+const tpTarget = ref('')
 
 // Action loading states
 const actionLoading = reactive({
@@ -959,6 +1107,28 @@ async function handleRawcmd() {
   }
 }
 
+// ─── Quick Commands ───
+
+async function quickCmd(cmd: string) {
+  if (!cmd.trim()) return
+  quickCmdLoading.value = true
+  quickCmdResult.value = ''
+  try {
+    const resp = await tshockRestApi.serverRawcmd(props.serverId, cmd)
+    const data = resp.data as any
+    quickCmdResult.value = restResponseText(data) || JSON.stringify(data, null, 2)
+    if (restBusinessFailed(data)) {
+      notification.error('命令执行失败', quickCmdResult.value)
+    } else {
+      notification.success('命令已执行', cmd)
+    }
+  } catch (e: any) {
+    notification.error('请求失败', e?.response?.data?.error || e?.message || '')
+  } finally {
+    quickCmdLoading.value = false
+  }
+}
+
 // ─── Init ───
 
 onMounted(async () => {
@@ -1088,6 +1258,26 @@ defineExpose({ refreshAll })
   text-align: center;
 }
 
+.quick-cmd-group {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.quick-cmd-group:last-of-type {
+  border-bottom: none;
+}
+
+.quick-cmd-group h4 {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.world-actions.compact {
+  gap: 6px;
+}
+
 @media (max-width: 900px) {
   .rest-cards {
     grid-template-columns: 1fr;
@@ -1095,6 +1285,44 @@ defineExpose({ refreshAll })
 
   .item-form {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .tshock-rest-panel {
+    padding: 12px;
+    border-radius: 8px;
+  }
+
+  .status-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 8px;
+  }
+
+  .stat-item {
+    padding: 8px;
+  }
+
+  .world-actions {
+    gap: 6px;
+  }
+
+  .input-row {
+    flex-direction: column;
+  }
+
+  .command-section h4 {
+    font-size: 14px;
+  }
+
+  .sub-section-header {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 480px) {
+  .status-grid {
+    grid-template-columns: 1fr 1fr;
   }
 }
 </style>

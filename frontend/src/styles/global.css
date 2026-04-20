@@ -174,9 +174,30 @@ code, pre {
   animation: spin 1s linear infinite;
 }
 
-/* Responsive */
+/* ===== Responsive ===== */
+
+/* Tablets and below */
 @media (max-width: 768px) {
   .console-terminal {
     font-size: 11px;
+    padding: 8px;
+  }
+
+  /* Naive UI layout content: tighter padding on mobile */
+  .n-layout-scroll-container {
+    padding: 12px !important;
+  }
+
+  /* Tables: horizontal scroll instead of overflow */
+  .n-data-table {
+    overflow-x: auto;
+  }
+}
+
+/* Phone portrait */
+@media (max-width: 480px) {
+  .console-terminal {
+    font-size: 10px;
+    border-radius: 4px;
   }
 }

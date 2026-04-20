@@ -20,7 +20,7 @@
       <top-bar />
       <n-layout-content
         :native-scrollbar="false"
-        content-style="padding: 20px;"
+        :content-style="contentPadding"
       >
         <router-view v-slot="{ Component, route }">
           <component :is="Component" :key="route.fullPath" />
@@ -31,12 +31,27 @@
 </template>
 
 <script setup lang="ts">
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { NLayout, NLayoutSider, NLayoutContent } from 'naive-ui'
 import { useAppStore } from '../../stores/app'
 import Sidebar from './Sidebar.vue'
 import TopBar from './TopBar.vue'
 
 const appStore = useAppStore()
+const windowWidth = ref(window.innerWidth)
+
+function onResize() {
+  windowWidth.value = window.innerWidth
+}
+
+onMounted(() => window.addEventListener('resize', onResize))
+onUnmounted(() => window.removeEventListener('resize', onResize))
+
+const contentPadding = computed(() => {
+  if (windowWidth.value <= 480) return 'padding: 8px;'
+  if (windowWidth.value <= 768) return 'padding: 12px;'
+  return 'padding: 20px;'
+})
 </script>
 
 <style scoped>

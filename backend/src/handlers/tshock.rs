@@ -80,13 +80,11 @@ fn table_has_column(conn: &Connection, table: &str, column: &str) -> bool {
         Ok(stmt) => stmt,
         Err(_) => return false,
     };
-    let rows = match stmt.query_map([], |row| row.get::<_, String>(1)) {
-        Ok(rows) => rows,
+    let columns: Vec<String> = match stmt.query_map([], |row| row.get::<_, String>(1)) {
+        Ok(rows) => rows.filter_map(Result::ok).collect(),
         Err(_) => return false,
     };
-    let result = rows.filter_map(Result::ok)
-        .any(|name| name.eq_ignore_ascii_case(column));
-    result
+    columns.iter().any(|name| name.eq_ignore_ascii_case(column))
 }
 
 fn users_account_id_column(conn: &Connection) -> &'static str {
