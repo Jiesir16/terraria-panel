@@ -349,20 +349,31 @@
             <n-button size="small" @click="quickCmd('/time 00:00')" :disabled="quickCmdLoading">午夜</n-button>
             <n-button size="small" @click="quickCmd('/time 04:30')" :disabled="quickCmdLoading">黎明</n-button>
             <n-button size="small" @click="quickCmd('/time 19:30')" :disabled="quickCmdLoading">黄昏</n-button>
-            <n-button size="small" type="info" @click="quickCmd('/worldevent rain')" :disabled="quickCmdLoading">开始下雨</n-button>
+            <n-button size="small" type="info" @click="quickCmd('/worldevent rain')" :disabled="quickCmdLoading">切换下雨</n-button>
+            <n-button size="small" @click="quickCmd('/worldevent sandstorm')" :disabled="quickCmdLoading">切换沙尘暴</n-button>
             <n-button size="small" @click="quickCmd('/wind 0')" :disabled="quickCmdLoading">无风</n-button>
           </div>
-          <p class="hint-text">TShock 当前版本提示 `/time` 必须使用 24 小时 `hh:mm` 格式；降雨使用官方权限文档里的 `/worldevent rain`。REST 没有稳定的“停止下雨”端点。</p>
+          <p class="hint-text">TShock 当前版本提示 `/time` 必须使用 24 小时 `hh:mm` 格式；降雨、沙尘暴使用 `/worldevent`，重复执行同一命令会切换状态。</p>
         </div>
 
         <div class="quick-cmd-group">
-          <h4>世界事件（REST 支持）</h4>
+          <h4>世界事件</h4>
           <div class="world-actions compact">
             <n-button size="small" type="error" @click="handleBloodmoon(true)" :loading="actionLoading.bloodmoonOn">触发血月</n-button>
             <n-button size="small" @click="handleBloodmoon(false)" :loading="actionLoading.bloodmoonOff">关闭血月</n-button>
             <n-button size="small" type="info" @click="handleMeteor" :loading="actionLoading.meteor">召唤陨石</n-button>
+            <n-button size="small" type="warning" @click="quickCmd('/worldevent bloodmoon')" :disabled="quickCmdLoading">切换血月</n-button>
+            <n-button size="small" @click="quickCmd('/worldevent fullmoon')" :disabled="quickCmdLoading">切换满月</n-button>
+            <n-button size="small" type="warning" @click="quickCmd('/worldevent eclipse')" :disabled="quickCmdLoading">切换日食</n-button>
+            <n-button size="small" @click="quickCmd('/worldevent lanternsnight')" :disabled="quickCmdLoading">灯笼夜</n-button>
+            <n-button size="small" @click="quickCmd('/worldevent meteorshower')" :disabled="quickCmdLoading">流星雨</n-button>
+            <n-button size="small" @click="quickCmd('/worldevent rain slime')" :disabled="quickCmdLoading">史莱姆雨</n-button>
+            <n-button size="small" @click="quickCmd('/worldevent invasion goblins')" :disabled="quickCmdLoading">哥布林入侵</n-button>
+            <n-button size="small" @click="quickCmd('/worldevent invasion pirates')" :disabled="quickCmdLoading">海盗入侵</n-button>
+            <n-button size="small" @click="quickCmd('/worldevent invasion martians')" :disabled="quickCmdLoading">火星暴乱</n-button>
+            <n-button size="small" @click="quickCmd('/worldevent invasion snowmen')" :disabled="quickCmdLoading">雪人军团</n-button>
           </div>
-          <p class="hint-text">官方 REST 只稳定暴露血月、陨石、保存、屠夫、自动保存等世界端点。入侵/日食等通常需要游戏内命令或插件，面板不再发送会失败的 rawcmd。</p>
+          <p class="hint-text">这些按钮走 TShock `/worldevent`。不同事件受世界进度和 TShock 权限限制，TShock 返回的信息会显示在“命令输出”和提示消息里。</p>
         </div>
 
         <div class="quick-cmd-group">
