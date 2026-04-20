@@ -35,9 +35,40 @@
         <n-tab-pane name="users" tab="用户管理">
           <div class="sub-section">
             <div class="sub-header">
-              <span class="muted">TShock 账号用于 /login 和 SSC 角色数据归属。</span>
+              <span class="muted">TShock 账号用于 /login；用户组权限不依赖 SSC。</span>
               <n-button v-if="authStore.isAdmin" size="small" type="primary" @click="openCreateAccount">
                 + 新建账号
+              </n-button>
+            </div>
+            <n-alert v-if="!authStore.isAdmin" type="warning" :show-icon="false" style="margin-bottom: 12px;">
+              当前面板账号不是管理员，所以不会显示 TShock 用户改组按钮。需要面板 admin 才能修改 TShock 用户组。
+            </n-alert>
+            <div v-else class="quick-group-change">
+              <n-select
+                v-model:value="quickGroupUser"
+                :options="userOptions"
+                filterable
+                tag
+                clearable
+                placeholder="TShock 账号名（可直接输入）"
+                style="min-width: 220px;"
+              />
+              <n-select
+                v-model:value="quickGroupTarget"
+                :options="groupOptions"
+                filterable
+                clearable
+                placeholder="目标用户组"
+                style="min-width: 180px;"
+              />
+              <n-button
+                size="small"
+                type="primary"
+                :loading="changingGroup"
+                :disabled="!quickGroupUser || !quickGroupTarget"
+                @click="confirmQuickChangeGroup"
+              >
+                修改用户组
               </n-button>
             </div>
             <div v-if="overview.users.length === 0" class="empty-note">暂无已注册 TShock 用户</div>
@@ -345,6 +376,8 @@ const showChangeGroup = ref(false)
 const editingUser = ref('')
 const selectedGroup = ref<string | null>(null)
 const changingGroup = ref(false)
+const quickGroupUser = ref<string | null>(null)
+const quickGroupTarget = ref<string | null>(null)
 
 // ─── Account editing ───
 const showAccountModal = ref(false)
@@ -392,6 +425,13 @@ const sscEditForm = ref({
 
 const groupOptions = computed(() =>
   (overview.value?.groups || []).map(g => ({ label: g.name, value: g.name }))
+)
+
+const userOptions = computed(() =>
+  (overview.value?.users || []).map(user => ({
+    label: `${user.username}${user.group_name ? ` (${user.group_name})` : ''}`,
+    value: user.username,
+  }))
 )
 
 function flattenPermissionLabels(nodes: PermissionNode[], target = new Map<string, string>()) {
@@ -808,19 +848,30 @@ function openChangeGroup(username: string, currentGroup?: string) {
   showChangeGroup.value = true
 }
 
-async function confirmChangeGroup() {
-  if (!selectedGroup.value) return
+async function updateTshockUserGroup(username: string, group: string) {
   changingGroup.value = true
   try {
-    await tshockRestApi.userUpdate(props.serverId, editingUser.value, undefined, selectedGroup.value)
-    notification.success('用户组已更新', `${editingUser.value} → ${selectedGroup.value}`)
-    showChangeGroup.value = false
-    loadOverview()
+    await tshockRestApi.userUpdate(props.serverId, username, undefined, group)
+    notification.success('用户组已更新', `${username} → ${group}`)
+    await loadOverview()
   } catch (error: any) {
     notification.error('修改失败', error?.response?.data?.error || '')
   } finally {
     changingGroup.value = false
   }
+}
+
+async function confirmChangeGroup() {
+  if (!selectedGroup.value) return
+  await updateTshockUserGroup(editingUser.value, selectedGroup.value)
+  showChangeGroup.value = false
+}
+
+async function confirmQuickChangeGroup() {
+  const username = quickGroupUser.value?.trim()
+  const group = quickGroupTarget.value
+  if (!username || !group) return
+  await updateTshockUserGroup(username, group)
 }
 
 function confirmDeleteUser(username: string) {
@@ -1043,6 +1094,18 @@ defineExpose({ loadAll })
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
+}
+
+.quick-group-change {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-body);
 }
 
 .perm-stats {

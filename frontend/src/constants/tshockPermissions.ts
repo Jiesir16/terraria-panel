@@ -94,9 +94,9 @@ export const TSHOCK_PERMISSION_TREE: PermissionNode[] = [
     key: 'tshock.npc',
     label: 'NPC 管理 (npc)',
     children: [
-      { key: 'tshock.npc.spawnmob', label: '生成 NPC' },
-      { key: 'tshock.npc.spawnboss', label: '生成 Boss' },
-      { key: 'tshock.npc.summonboss', label: '使用物品召唤Boss' },
+      { key: 'tshock.npc.spawnmob', label: '命令生成 NPC (/spawnmob)' },
+      { key: 'tshock.npc.spawnboss', label: '命令生成 Boss (/spawnboss)' },
+      { key: 'tshock.npc.summonboss', label: '允许召唤 Boss（召唤物/肉山）' },
       { key: 'tshock.npc.butcher', label: '清除所有敌怪' },
       { key: 'tshock.npc.invade', label: '发起入侵事件' },
       { key: 'tshock.npc.startinvasion', label: '物品触发入侵' },
