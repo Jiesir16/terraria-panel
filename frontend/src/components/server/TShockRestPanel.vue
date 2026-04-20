@@ -150,7 +150,7 @@
             :columns="itemColumns"
             :data="items"
             :row-key="(row: any) => row.id"
-            :pagination="{ pageSize: 20 }"
+            :pagination="{ pageSize: 8 }"
             size="small"
             striped
           />
@@ -257,8 +257,8 @@
       </n-card>
 
       <!-- ─── Quick Commands ─── -->
-      <n-card title="快捷命令" class="rest-card">
-        <p class="hint-text">通过 rawcmd 执行常用管理命令，无需进入游戏。可指定目标玩家。</p>
+      <n-card title="快捷命令" class="rest-card compact-card">
+        <p class="hint-text">只保留 REST/rawcmd 在控制台上下文可可靠执行的命令。传送、Boss 召唤这类游戏内上下文命令不会再直接发送。</p>
 
         <div style="margin-bottom: 12px;">
           <n-select
@@ -273,131 +273,59 @@
         </div>
 
         <div class="quick-cmd-group">
-          <h4>玩家模式</h4>
-          <div class="world-actions compact">
-            <n-button size="small" type="success" @click="quickCmd('/god ' + quickCmdPlayer)" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
-              God 模式 (切换)
-            </n-button>
-            <n-button size="small" type="info" @click="quickCmd('/heal ' + quickCmdPlayer)" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
-              满血满蓝
-            </n-button>
-            <n-button size="small" @click="quickCmd('/slap ' + quickCmdPlayer + ' 0')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
-              拍打 (不伤害)
-            </n-button>
-          </div>
-        </div>
-
-        <div class="quick-cmd-group">
           <h4>增益 Buff</h4>
-          <div class="world-actions compact">
-            <n-button size="small" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' 5 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
-              铁皮 (60分)
-            </n-button>
-            <n-button size="small" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' 1 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
-              黑曜石皮 (60分)
-            </n-button>
-            <n-button size="small" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' 3 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
-              迅捷 (60分)
-            </n-button>
-            <n-button size="small" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' 11 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
-              光芒 (60分)
-            </n-button>
-            <n-button size="small" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' 113 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
-              生命再生 (60分)
-            </n-button>
-            <n-button size="small" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' 114 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
-              魔力再生 (60分)
-            </n-button>
-            <n-button size="small" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' 104 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
-              挖矿增速 (60分)
-            </n-button>
-            <n-button size="small" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' 107 3600')" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
-              仙灵 (60分)
-            </n-button>
-          </div>
-          <div class="input-row" style="margin-top: 8px;">
-            <n-input-number v-model:value="customBuffId" :min="1" :max="999" placeholder="Buff ID" style="width: 120px;" />
+          <div class="input-row">
+            <n-select
+              v-model:value="selectedBuffId"
+              :options="buffOptions"
+              filterable
+              tag
+              clearable
+              placeholder="选择 Buff / Debuff，或直接输入 ID"
+              style="min-width: 260px;"
+            />
             <n-input-number v-model:value="customBuffDuration" :min="1" :max="86400" placeholder="秒" style="width: 100px;" />
-            <n-button size="small" type="primary" @click="quickCmd('/gbuff ' + quickCmdPlayer + ' ' + customBuffId + ' ' + customBuffDuration)" :disabled="!quickCmdPlayer || !customBuffId" :loading="quickCmdLoading">
-              施加自定义 Buff
+            <n-button size="small" type="primary" @click="applySelectedBuff" :disabled="!quickCmdPlayer || !selectedBuffId || quickCmdLoading">
+              施加 Buff
             </n-button>
           </div>
+          <p class="hint-text">Buff ID 来源：Terraria 官方 Wiki Buff IDs。下拉内置常用项，也可以直接输入 Wiki 上的任意 Buff ID。</p>
         </div>
 
         <div class="quick-cmd-group">
           <h4>时间与天气</h4>
           <div class="world-actions compact">
-            <n-button size="small" @click="quickCmd('/time noon')" :loading="quickCmdLoading">正午</n-button>
-            <n-button size="small" @click="quickCmd('/time midnight')" :loading="quickCmdLoading">午夜</n-button>
-            <n-button size="small" @click="quickCmd('/time dawn')" :loading="quickCmdLoading">黎明</n-button>
-            <n-button size="small" @click="quickCmd('/time dusk')" :loading="quickCmdLoading">黄昏</n-button>
-            <n-button size="small" @click="quickCmd('/rain start')" :loading="quickCmdLoading">开始下雨</n-button>
-            <n-button size="small" @click="quickCmd('/rain stop')" :loading="quickCmdLoading">停止下雨</n-button>
-            <n-button size="small" @click="quickCmd('/wind 0')" :loading="quickCmdLoading">无风</n-button>
+            <n-button size="small" @click="quickCmd('/time 12:00')" :disabled="quickCmdLoading">正午</n-button>
+            <n-button size="small" @click="quickCmd('/time 00:00')" :disabled="quickCmdLoading">午夜</n-button>
+            <n-button size="small" @click="quickCmd('/time 04:30')" :disabled="quickCmdLoading">黎明</n-button>
+            <n-button size="small" @click="quickCmd('/time 19:30')" :disabled="quickCmdLoading">黄昏</n-button>
+            <n-button size="small" @click="quickCmd('/wind 0')" :disabled="quickCmdLoading">无风</n-button>
           </div>
+          <p class="hint-text">TShock 当前版本提示 `/time` 必须使用 24 小时 `hh:mm` 格式，所以这里不再发送 dawn/dusk 字符串。</p>
         </div>
 
         <div class="quick-cmd-group">
-          <h4>世界事件</h4>
+          <h4>世界事件（REST 支持）</h4>
           <div class="world-actions compact">
-            <n-button size="small" type="error" @click="quickCmd('/invade goblin')" :loading="quickCmdLoading">哥布林入侵</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/invade snowman')" :loading="quickCmdLoading">雪人军团</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/invade pirate')" :loading="quickCmdLoading">海盗入侵</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/invade martian')" :loading="quickCmdLoading">火星暴乱</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/invade pumpkinmoon')" :loading="quickCmdLoading">南瓜月</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/invade frostmoon')" :loading="quickCmdLoading">霜月</n-button>
-            <n-button size="small" type="warning" @click="quickCmd('/eclipse')" :loading="quickCmdLoading">日食</n-button>
-            <n-button size="small" @click="quickCmd('/invade stop')" :loading="quickCmdLoading">停止入侵</n-button>
+            <n-button size="small" type="error" @click="handleBloodmoon(true)" :loading="actionLoading.bloodmoonOn">触发血月</n-button>
+            <n-button size="small" @click="handleBloodmoon(false)" :loading="actionLoading.bloodmoonOff">关闭血月</n-button>
+            <n-button size="small" type="info" @click="handleMeteor" :loading="actionLoading.meteor">召唤陨石</n-button>
           </div>
+          <p class="hint-text">官方 REST 只稳定暴露血月、陨石、保存、屠夫、自动保存等世界端点。入侵/日食/雨通常需要游戏内命令或插件，面板不再发送会失败的 rawcmd。</p>
         </div>
 
         <div class="quick-cmd-group">
           <h4>传送</h4>
-          <div class="world-actions compact">
-            <n-button size="small" @click="quickCmd('/home ' + quickCmdPlayer)" :disabled="!quickCmdPlayer" :loading="quickCmdLoading">
-              传送回家
-            </n-button>
-            <n-button size="small" @click="quickCmd('/spawn')" :loading="quickCmdLoading">
-              传送出生点
-            </n-button>
-            <n-button size="small" @click="quickCmd('/tpnpc 22')" :loading="quickCmdLoading">
-              传送到向导
-            </n-button>
-          </div>
-          <div class="input-row" style="margin-top: 8px;">
-            <n-select
-              v-model:value="tpTarget"
-              :options="playerOptions"
-              filterable
-              tag
-              clearable
-              placeholder="传送目标玩家"
-              style="width: 220px;"
-            />
-            <n-button size="small" type="info" @click="quickCmd('/tp ' + quickCmdPlayer + ' ' + tpTarget)" :disabled="!quickCmdPlayer || !tpTarget" :loading="quickCmdLoading">
-              传送到目标
-            </n-button>
-          </div>
+          <n-alert type="warning" :show-icon="false">
+            `/tp`、`/home`、`/spawn`、`/tpnpc` 在当前 TShock 返回 “You must use this command in-game.”，不能通过 REST 控制台可靠执行。需要游戏内管理员执行，或安装提供远程传送的 TShock 插件。
+          </n-alert>
         </div>
 
         <div class="quick-cmd-group">
           <h4>Boss 召唤</h4>
-          <div class="world-actions compact">
-            <n-button size="small" type="error" @click="quickCmd('/spawnmob 13 1')" :loading="quickCmdLoading">世界吞噬者</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnmob 266 1')" :loading="quickCmdLoading">克苏鲁之脑</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnmob 4 1')" :loading="quickCmdLoading">克苏鲁之眼</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnmob 35 1')" :loading="quickCmdLoading">骷髅王</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnmob 50 1')" :loading="quickCmdLoading">史莱姆王</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnmob 113 1')" :loading="quickCmdLoading">血肉墙</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnmob 134 1')" :loading="quickCmdLoading">毁灭者</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnmob 127 1')" :loading="quickCmdLoading">机械骷髅王</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnmob 125 1')" :loading="quickCmdLoading">双子魔眼-激光</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnmob 126 1')" :loading="quickCmdLoading">双子魔眼-魔焰</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnmob 262 1')" :loading="quickCmdLoading">世纪之花</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnmob 245 1')" :loading="quickCmdLoading">石巨人</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnmob 439 1')" :loading="quickCmdLoading">拜月教邪教徒</n-button>
-            <n-button size="small" type="error" @click="quickCmd('/spawnmob 398 1')" :loading="quickCmdLoading">月亮领主</n-button>
-          </div>
+          <n-alert type="warning" :show-icon="false">
+            `/spawnmob`、`/spawnboss` 在当前 TShock 返回 “You must use this command in-game.”，说明命令需要玩家上下文。面板不再提供无效按钮。
+          </n-alert>
         </div>
 
         <n-card v-show="quickCmdResult" size="small" style="margin-top: 12px;" title="命令输出">
@@ -508,9 +436,8 @@ const rawCmdResult = ref('')
 const quickCmdPlayer = ref('')
 const quickCmdLoading = ref(false)
 const quickCmdResult = ref('')
-const customBuffId = ref<number | null>(null)
+const selectedBuffId = ref<number | string | null>(5)
 const customBuffDuration = ref(3600)
-const tpTarget = ref('')
 
 // Action loading states
 const actionLoading = reactive({
@@ -564,6 +491,69 @@ const playerOptions = computed(() => players.value
   .map((player: any) => ({ label: player.nickname, value: player.nickname }))
 )
 
+const TERRARIA_BUFFS = [
+  { id: 1, name: 'Obsidian Skin', zh: '黑曜石皮', type: 'Buff' },
+  { id: 2, name: 'Regeneration', zh: '再生', type: 'Buff' },
+  { id: 3, name: 'Swiftness', zh: '迅捷', type: 'Buff' },
+  { id: 4, name: 'Gills', zh: '鱼鳃', type: 'Buff' },
+  { id: 5, name: 'Ironskin', zh: '铁皮', type: 'Buff' },
+  { id: 6, name: 'Mana Regeneration', zh: '魔力再生', type: 'Buff' },
+  { id: 7, name: 'Magic Power', zh: '魔能', type: 'Buff' },
+  { id: 8, name: 'Featherfall', zh: '羽落', type: 'Buff' },
+  { id: 9, name: 'Spelunker', zh: '洞穴探险', type: 'Buff' },
+  { id: 10, name: 'Invisibility', zh: '隐身', type: 'Buff' },
+  { id: 11, name: 'Shine', zh: '光芒', type: 'Buff' },
+  { id: 12, name: 'Night Owl', zh: '夜猫子', type: 'Buff' },
+  { id: 13, name: 'Battle', zh: '战斗', type: 'Buff' },
+  { id: 14, name: 'Thorns', zh: '荆棘', type: 'Buff' },
+  { id: 15, name: 'Water Walking', zh: '水上漂', type: 'Buff' },
+  { id: 16, name: 'Archery', zh: '箭术', type: 'Buff' },
+  { id: 17, name: 'Hunter', zh: '狩猎', type: 'Buff' },
+  { id: 18, name: 'Gravitation', zh: '重力', type: 'Buff' },
+  { id: 26, name: 'Well Fed', zh: '酒足饭饱', type: 'Buff' },
+  { id: 29, name: 'Clairvoyance', zh: '灵视', type: 'Buff' },
+  { id: 48, name: 'Honey', zh: '蜂蜜', type: 'Buff' },
+  { id: 87, name: 'Cozy Fire', zh: '舒适篝火', type: 'Buff' },
+  { id: 89, name: 'Heart Lamp', zh: '心灯', type: 'Buff' },
+  { id: 93, name: 'Ammo Box', zh: '弹药箱', type: 'Buff' },
+  { id: 104, name: 'Mining', zh: '挖矿', type: 'Buff' },
+  { id: 105, name: 'Heartreach', zh: '拾心', type: 'Buff' },
+  { id: 106, name: 'Calm', zh: '镇静', type: 'Buff' },
+  { id: 107, name: 'Builder', zh: '建筑工', type: 'Buff' },
+  { id: 108, name: 'Titan', zh: '泰坦', type: 'Buff' },
+  { id: 109, name: 'Flipper', zh: '脚蹼', type: 'Buff' },
+  { id: 110, name: 'Summoning', zh: '召唤', type: 'Buff' },
+  { id: 111, name: 'Dangersense', zh: '危险感知', type: 'Buff' },
+  { id: 112, name: 'Ammo Reservation', zh: '弹药储备', type: 'Buff' },
+  { id: 113, name: 'Lifeforce', zh: '生命力', type: 'Buff' },
+  { id: 114, name: 'Endurance', zh: '耐力', type: 'Buff' },
+  { id: 115, name: 'Rage', zh: '暴怒', type: 'Buff' },
+  { id: 116, name: 'Inferno', zh: '狱火', type: 'Buff' },
+  { id: 117, name: 'Wrath', zh: '怒气', type: 'Buff' },
+  { id: 121, name: 'Fishing', zh: '钓鱼', type: 'Buff' },
+  { id: 122, name: 'Sonar', zh: '声呐', type: 'Buff' },
+  { id: 123, name: 'Crate', zh: '宝匣', type: 'Buff' },
+  { id: 124, name: 'Warmth', zh: '温暖', type: 'Buff' },
+  { id: 150, name: 'Bewitched', zh: '着魔', type: 'Buff' },
+  { id: 257, name: 'Lucky', zh: '幸运', type: 'Buff' },
+  { id: 336, name: 'Hearty Meal', zh: '丰盛大餐', type: 'Buff' },
+  { id: 20, name: 'Poisoned', zh: '中毒', type: 'Debuff' },
+  { id: 24, name: 'On Fire!', zh: '着火', type: 'Debuff' },
+  { id: 31, name: 'Confused', zh: '困惑', type: 'Debuff' },
+  { id: 39, name: 'Cursed Inferno', zh: '咒火', type: 'Debuff' },
+  { id: 44, name: 'Frostburn', zh: '霜冻', type: 'Debuff' },
+  { id: 69, name: 'Ichor', zh: '灵液', type: 'Debuff' },
+  { id: 70, name: 'Acid Venom', zh: '酸性毒液', type: 'Debuff' },
+  { id: 88, name: 'Chaos State', zh: '混沌状态', type: 'Debuff' },
+  { id: 323, name: 'Hellfire', zh: '地狱火', type: 'Debuff' },
+  { id: 324, name: 'Frostbite', zh: '冻伤', type: 'Debuff' },
+]
+
+const buffOptions = TERRARIA_BUFFS.map((buff) => ({
+  label: `#${buff.id} ${buff.zh} / ${buff.name} (${buff.type})`,
+  value: buff.id,
+}))
+
 function itemDisplayName(item: TerrariaItem) {
   return item.zh_name ? `${item.zh_name} / ${item.name}` : item.name
 }
@@ -592,6 +582,10 @@ function restBusinessFailed(data: any): boolean {
     || text.includes('could not find')
     || text.includes('failed')
     || text.includes('error')
+}
+
+function notificationText(text: string) {
+  return text.length > 220 ? `${text.slice(0, 220)}...` : text
 }
 
 const itemOptions = computed(() => items.value.map((item) => ({
@@ -958,6 +952,16 @@ function handleGiveItem() {
   })
 }
 
+function applySelectedBuff() {
+  if (!quickCmdPlayer.value || !selectedBuffId.value) return
+  const buffId = Number(selectedBuffId.value)
+  if (!Number.isFinite(buffId) || buffId <= 0) {
+    notification.error('Buff ID 无效', '请选择列表中的 Buff，或输入一个正整数 ID')
+    return
+  }
+  quickCmd(`/gbuff ${quickCmdPlayer.value} ${buffId} ${customBuffDuration.value}`)
+}
+
 // ─── Ban actions ───
 
 async function handleCreateBan() {
@@ -1107,6 +1111,7 @@ async function handleRawcmd() {
       notification.error('命令执行失败', rawCmdResult.value)
       return
     }
+    notification.success('命令已执行', notificationText(rawCmdResult.value || rawCmd.value))
     rawCmd.value = ''
   } catch (e: any) {
     notification.error('请求失败', e?.response?.data?.error || e?.message || '')
@@ -1127,7 +1132,7 @@ async function quickCmd(cmd: string) {
     if (restBusinessFailed(data)) {
       notification.error('命令执行失败', quickCmdResult.value)
     } else {
-      notification.success('命令已执行', cmd)
+      notification.success('命令已执行', notificationText(quickCmdResult.value || cmd))
     }
   } catch (e: any) {
     notification.error('请求失败', e?.response?.data?.error || e?.message || '')
@@ -1184,6 +1189,10 @@ defineExpose({ refreshAll })
   border: 1px solid var(--border-color);
 }
 
+.compact-card :deep(.n-card__content) {
+  padding-top: 12px;
+}
+
 .stat-item {
   background: var(--bg-overlay, rgba(255,255,255,0.03));
   border: 1px solid var(--border-color);
@@ -1224,6 +1233,12 @@ defineExpose({ refreshAll })
   margin-top: 0;
   padding-top: 0;
   border-top: 0;
+  align-items: center;
+}
+
+.world-actions.compact :deep(.n-button) {
+  min-width: 88px;
+  justify-content: center;
 }
 
 .command-section h4 {
@@ -1240,6 +1255,8 @@ defineExpose({ refreshAll })
 .input-row {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 .item-form {
@@ -1266,8 +1283,8 @@ defineExpose({ refreshAll })
 }
 
 .quick-cmd-group {
-  margin-bottom: 16px;
-  padding-bottom: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--border-color);
 }
 
