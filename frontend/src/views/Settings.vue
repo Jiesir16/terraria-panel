@@ -13,7 +13,7 @@
             </div>
             <div class="info-item">
               <span class="label">操作系统:</span>
-              <span class="value">{{ systemInfo?.os_version }}</span>
+              <span class="value">{{ systemInfo?.os_name || '' }} {{ systemInfo?.os_version || '' }}</span>
             </div>
             <div class="info-item">
               <span class="label">.NET 版本:</span>
@@ -29,56 +29,74 @@
             </div>
             <div class="info-item">
               <span class="label">总内存:</span>
-              <span class="value">{{ formatBytes(systemInfo?.total_memory || 0) }}</span>
+              <span class="value">{{ formatBytes(systemInfo?.memory_total || 0) }}</span>
             </div>
             <div class="info-item">
               <span class="label">可用内存:</span>
-              <span class="value">{{ formatBytes(systemInfo?.available_memory || 0) }}</span>
+              <span class="value">{{ formatBytes((systemInfo?.memory_total || 0) - (systemInfo?.memory_used || 0)) }}</span>
             </div>
             <div class="info-item">
               <span class="label">总磁盘:</span>
-              <span class="value">{{ formatBytes(systemInfo?.total_disk || 0) }}</span>
+              <span class="value">{{ formatBytes(systemInfo?.disk_total || 0) }}</span>
             </div>
             <div class="info-item">
               <span class="label">可用磁盘:</span>
-              <span class="value">{{ formatBytes(systemInfo?.available_disk || 0) }}</span>
+              <span class="value">{{ formatBytes((systemInfo?.disk_total || 0) - (systemInfo?.disk_used || 0)) }}</span>
             </div>
           </div>
         </n-spin>
       </div>
 
       <div class="setting-card">
-        <h2>用户设置</h2>
-        <div class="form">
-          <n-form-item label="修改密码">
-            <div class="password-form">
-              <n-input
-                v-model:value="passwordForm.oldPassword"
-                type="password"
-                placeholder="旧密码"
-                class="password-input"
-              />
-              <n-input
-                v-model:value="passwordForm.newPassword"
-                type="password"
-                placeholder="新密码"
-                class="password-input"
-              />
-              <n-input
-                v-model:value="passwordForm.confirmPassword"
-                type="password"
-                placeholder="确认新密码"
-                class="password-input"
-              />
-              <n-button
-                type="primary"
-                :loading="passwordLoading"
-                @click="handleChangePassword"
-              >
-                修改密码
-              </n-button>
-            </div>
-          </n-form-item>
+        <h2>用户信息</h2>
+        <div class="info-list" style="margin-bottom: 24px;">
+          <div class="info-item">
+            <span class="label">用户名:</span>
+            <span class="value">{{ authStore.user?.username || '-' }}</span>
+          </div>
+          <div class="info-item">
+            <span class="label">角色:</span>
+            <span class="value">
+              <n-tag :type="authStore.user?.role === 'admin' ? 'error' : authStore.user?.role === 'operator' ? 'warning' : 'info'" size="small" :bordered="false">
+                {{ authStore.user?.role === 'admin' ? '管理员' : authStore.user?.role === 'operator' ? '操作员' : '普通用户' }}
+              </n-tag>
+            </span>
+          </div>
+        </div>
+
+        <n-divider style="margin: 24px 0;" />
+
+        <h2 style="margin-bottom: 16px;">修改密码</h2>
+        <div class="password-form">
+          <n-input
+            v-model:value="passwordForm.oldPassword"
+            type="password"
+            show-password-on="click"
+            placeholder="旧密码"
+            class="password-input"
+          />
+          <n-input
+            v-model:value="passwordForm.newPassword"
+            type="password"
+            show-password-on="click"
+            placeholder="新密码"
+            class="password-input"
+          />
+          <n-input
+            v-model:value="passwordForm.confirmPassword"
+            type="password"
+            show-password-on="click"
+            placeholder="确认新密码"
+            class="password-input"
+          />
+          <n-button
+            type="primary"
+            :loading="passwordLoading"
+            @click="handleChangePassword"
+            block
+          >
+            确认修改
+          </n-button>
         </div>
       </div>
     </div>
@@ -87,7 +105,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { NSpin, NFormItem, NInput, NButton } from 'naive-ui'
+import { NSpin, NInput, NButton, NTag, NDivider } from 'naive-ui'
 import { systemApi } from '../api/system'
 import { useAuthStore } from '../stores/auth'
 import { useNotification } from '../composables/useNotification'

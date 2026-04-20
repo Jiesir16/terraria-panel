@@ -180,7 +180,9 @@ function handleMissingServer() {
 }
 
 // Watch for route param changes (e.g. navigating from server 1 to server 2)
-watch(serverId, () => {
+watch(serverId, (newId) => {
+  if (!newId || route.name !== 'ServerDetail') return
+  
   serverMissingHandled.value = false
   loadServer()
   loadMods()

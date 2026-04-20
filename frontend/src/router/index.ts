@@ -1,5 +1,8 @@
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router'
+import { createDiscreteApi } from 'naive-ui'
 import { useAuthStore } from '../stores/auth'
+
+const { loadingBar } = createDiscreteApi(['loadingBar'])
 
 const routes: RouteRecordRaw[] = [
   {
@@ -68,6 +71,8 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to, _from, next) => {
+  loadingBar.start()
+  
   const authStore = useAuthStore()
 
   authStore.initFromStorage()
@@ -99,6 +104,14 @@ router.beforeEach(async (to, _from, next) => {
   }
 
   next()
+})
+
+router.afterEach(() => {
+  loadingBar.finish()
+})
+
+router.onError(() => {
+  loadingBar.error()
 })
 
 export default router

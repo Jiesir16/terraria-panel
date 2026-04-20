@@ -22,10 +22,8 @@
         :native-scrollbar="false"
         content-style="padding: 20px;"
       >
-        <router-view v-slot="{ Component }">
-          <keep-alive>
-            <component :is="Component" />
-          </keep-alive>
+        <router-view v-slot="{ Component, route }">
+          <component :is="Component" :key="route.fullPath" />
         </router-view>
       </n-layout-content>
     </n-layout>

@@ -11,6 +11,7 @@ export interface SystemInfo {
   uptime: number
   // optional fields for future extensions
   hostname?: string
+  os_name?: string
   os_version?: string
   dotnet_version?: string
   mono_version?: string

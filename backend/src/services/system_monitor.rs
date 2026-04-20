@@ -11,17 +11,58 @@ pub struct SystemInfo {
     pub disk_used: u64,
     pub disk_usage: f32,
     pub uptime: u64,
+    pub hostname: Option<String>,
+    pub os_version: Option<String>,
+    pub os_name: Option<String>,
+    pub cpu_count: usize,
+    pub dotnet_version: Option<String>,
+    pub mono_version: Option<String>,
 }
 
 pub struct SystemMonitor {
     system: System,
+    dotnet_version: Option<String>,
+    mono_version: Option<String>,
 }
 
 impl SystemMonitor {
     pub fn new() -> Self {
         let mut system = System::new_all();
         system.refresh_all();
-        Self { system }
+        
+        let dotnet_version = std::process::Command::new("dotnet")
+            .arg("--info")
+            .output()
+            .ok()
+            .and_then(|output| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    let line = line.trim();
+                    if line.starts_with("Version:") {
+                        return Some(line.trim_start_matches("Version:").trim().to_string());
+                    }
+                }
+                None
+            });
+
+        let mono_version = std::process::Command::new("mono")
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|output| {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    stdout.lines().next().map(|s| s.trim().to_string())
+                } else {
+                    None
+                }
+            });
+
+        Self { 
+            system,
+            dotnet_version,
+            mono_version,
+        }
     }
 
     pub fn get_system_info(&mut self) -> SystemInfo {
@@ -53,6 +94,10 @@ impl SystemMonitor {
         };
 
         let uptime = System::uptime();
+        let hostname = System::host_name();
+        let os_version = System::os_version();
+        let os_name = System::name();
+        let cpu_count = self.system.cpus().len();
 
         SystemInfo {
             cpu_usage,
@@ -63,6 +108,12 @@ impl SystemMonitor {
             disk_used,
             disk_usage,
             uptime,
+            hostname,
+            os_version,
+            os_name,
+            cpu_count,
+            dotnet_version: self.dotnet_version.clone(),
+            mono_version: self.mono_version.clone(),
         }
     }
 }
