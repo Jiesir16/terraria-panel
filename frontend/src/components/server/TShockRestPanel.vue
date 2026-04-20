@@ -104,6 +104,37 @@
             striped
           />
         </n-spin>
+
+        <n-modal v-model:show="showTempGroupModal" preset="dialog" title="临时修改在线玩家组">
+          <n-alert type="info" :show-icon="false" style="margin-bottom: 12px;">
+            这是 TShock /tempgroup，会直接修改当前在线玩家的会话组，不需要玩家绑定 TShock 账号；玩家断线后会失效。
+          </n-alert>
+          <n-form>
+            <n-form-item label="在线玩家">
+              <n-input v-model:value="tempGroupPlayer" disabled />
+            </n-form-item>
+            <n-form-item label="目标组">
+              <n-select
+                v-model:value="tempGroupTarget"
+                :options="groupOptions"
+                :loading="groupsLoading"
+                filterable
+                tag
+                clearable
+                placeholder="选择或输入 TShock 用户组"
+              />
+            </n-form-item>
+            <n-form-item label="持续时间">
+              <n-input v-model:value="tempGroupDuration" placeholder="例如 30m / 1h / 1d" />
+            </n-form-item>
+          </n-form>
+          <template #action>
+            <n-button @click="showTempGroupModal = false">取消</n-button>
+            <n-button type="primary" :loading="tempGroupLoading" :disabled="!tempGroupPlayer || !tempGroupTarget || !tempGroupDuration.trim()" @click="confirmTempGroup">
+              修改
+            </n-button>
+          </template>
+        </n-modal>
       </n-card>
 
       <!-- ─── Item Give ─── -->
@@ -423,6 +454,13 @@ const rulesText = ref('')
 // Players
 const playersLoading = ref(false)
 const players = ref<TShockRestPlayer[]>([])
+const groupsLoading = ref(false)
+const groupOptions = ref<{ label: string; value: string }[]>([])
+const showTempGroupModal = ref(false)
+const tempGroupPlayer = ref('')
+const tempGroupTarget = ref<string | null>(null)
+const tempGroupDuration = ref('1h')
+const tempGroupLoading = ref(false)
 
 // Items
 const itemsLoading = ref(false)
@@ -501,6 +539,7 @@ const playerColumns: DataTableColumns = [
         h(NButton, { size: 'tiny', type: 'error', onClick: () => handleKillPlayer(row.nickname) }, { default: () => '击杀' }),
         h(NButton, { size: 'tiny', onClick: () => handleMute(row.nickname) }, { default: () => '禁言' }),
         h(NButton, { size: 'tiny', onClick: () => handleUnmute(row.nickname) }, { default: () => '解禁' }),
+        h(NButton, { size: 'tiny', type: 'primary', onClick: () => openTempGroup(row) }, { default: () => '临时改组' }),
       ])
     }
   },
@@ -753,6 +792,31 @@ async function loadPlayers() {
   }
 }
 
+function extractGroupNames(data: any): string[] {
+  const rawGroups = data?.groups ?? data?.response?.groups ?? []
+  if (!Array.isArray(rawGroups)) return []
+  return rawGroups
+    .map((group: any) => {
+      if (typeof group === 'string') return group
+      return group?.name ?? group?.group ?? group?.GroupName
+    })
+    .filter((name: any): name is string => typeof name === 'string' && name.trim().length > 0)
+}
+
+async function loadGroups() {
+  groupsLoading.value = true
+  try {
+    const resp = await tshockRestApi.groupList(props.serverId)
+    const names = extractGroupNames(resp.data)
+    groupOptions.value = names.map(name => ({ label: name, value: name }))
+  } catch (e: any) {
+    const names = Array.from(new Set(players.value.map(player => player.group).filter(Boolean)))
+    groupOptions.value = names.map(name => ({ label: name, value: name }))
+  } finally {
+    groupsLoading.value = false
+  }
+}
+
 async function loadItems() {
   itemsLoading.value = true
   try {
@@ -811,6 +875,7 @@ function refreshAll() {
   loadStatus()
   loadWorld()
   loadPlayers()
+  loadGroups()
   loadBans()
   loadItems()
 }
@@ -965,6 +1030,43 @@ async function handleUnmute(player: string) {
     notification.success('已解除禁言', player)
   } catch (e: any) {
     notification.error('解禁失败', e?.response?.data?.error || '')
+  }
+}
+
+function openTempGroup(player: TShockRestPlayer) {
+  tempGroupPlayer.value = player.nickname
+  tempGroupTarget.value = player.group || null
+  tempGroupDuration.value = '1h'
+  showTempGroupModal.value = true
+  if (groupOptions.value.length === 0) {
+    loadGroups()
+  }
+}
+
+async function confirmTempGroup() {
+  const player = tempGroupPlayer.value.trim()
+  const group = tempGroupTarget.value?.trim()
+  const duration = tempGroupDuration.value.trim()
+  if (!player || !group || !duration) return
+
+  tempGroupLoading.value = true
+  try {
+    const cmd = `/tempgroup ${quoteCommandArg(player)} ${quoteCommandArg(group)} ${duration}`
+    const resp = await tshockRestApi.serverRawcmd(props.serverId, cmd)
+    const data = resp.data as any
+    const message = restResponseText(data) || JSON.stringify(data, null, 2)
+    quickCmdResult.value = message
+    if (restBusinessFailed(data)) {
+      notification.error('临时改组失败', notificationText(message || 'TShock 返回失败'))
+      return
+    }
+    notification.success('临时改组已发送', notificationText(message || `${player} → ${group} (${duration})`))
+    showTempGroupModal.value = false
+    await loadPlayers()
+  } catch (e: any) {
+    notification.error('临时改组失败', e?.response?.data?.error || e?.message || '')
+  } finally {
+    tempGroupLoading.value = false
   }
 }
 
