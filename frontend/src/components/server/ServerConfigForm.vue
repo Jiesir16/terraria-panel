@@ -98,6 +98,15 @@
           />
         </n-form-item>
 
+        <n-form-item label="邪恶环境" path="world_evil">
+          <n-select
+            v-model:value="formData.world_evil"
+            :options="worldEvilOptions"
+            :disabled="usingExistingWorld"
+            placeholder="选择世界邪恶环境"
+          />
+        </n-form-item>
+
         <n-form-item label="世界种子" path="seed">
           <n-input v-model:value="formData.seed" :disabled="usingExistingWorld" placeholder="留空则随机生成" />
         </n-form-item>
@@ -305,6 +314,7 @@ const formData = ref({
   world_width: 6400 as number | null,
   world_height: 1800 as number | null,
   difficulty: 0 as number | null,
+  world_evil: 0 as number | null,
   seed: '',
   // 游戏规则
   enable_whitelist: false,
@@ -346,6 +356,12 @@ const difficultyOptions = [
   { label: '专家 (Expert)', value: 1 },
   { label: '大师 (Master)', value: 2 },
   { label: '旅途 (Journey)', value: 3 }
+]
+
+const worldEvilOptions = [
+  { label: '随机 (Random)', value: 0 },
+  { label: '腐化 (Corruption)', value: 1 },
+  { label: '血腥 (Crimson)', value: 2 }
 ]
 
 const pvpModeOptions = [

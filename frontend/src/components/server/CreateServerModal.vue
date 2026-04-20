@@ -113,6 +113,7 @@ const form = ref({
   world_name: '',
   world_size: 2,
   difficulty: 0,
+  world_evil: 0,
   seed: '',
   auto_start: false
 })
@@ -140,6 +141,12 @@ const difficultyOptions = [
   { label: '专家 (Expert)', value: 1 },
   { label: '大师 (Master)', value: 2 },
   { label: '旅途 (Journey)', value: 3 }
+]
+
+const worldEvilOptions = [
+  { label: '随机 (Random)', value: 0 },
+  { label: '腐化 (Corruption)', value: 1 },
+  { label: '血腥 (Crimson)', value: 2 }
 ]
 
 const versionOptions = computed(() =>
@@ -202,6 +209,7 @@ async function handleCreate() {
             ? [0, 1200, 1800, 2400][form.value.world_size]
             : 1800,
           difficulty: form.value.difficulty,
+          world_evil: form.value.world_evil,
           seed: form.value.seed || undefined,
           server_password: form.value.password || undefined,
         })
@@ -232,6 +240,7 @@ function handleCancel() {
     world_name: '',
     world_size: 2,
     difficulty: 0,
+    world_evil: 0,
     seed: '',
     auto_start: false
   }

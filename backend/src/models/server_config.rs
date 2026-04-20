@@ -15,6 +15,7 @@ pub struct ServerConfig {
     pub world_width: Option<u32>,
     pub world_height: Option<u32>,
     pub seed: Option<String>,
+    pub world_evil: Option<i32>, // 0=Random, 1=Corruption, 2=Crimson
 
     // === 游戏规则 ===
     pub enable_whitelist: Option<bool>,
@@ -206,6 +207,7 @@ impl ServerConfig {
             world_width: None,
             world_height: None,
             seed: None,
+            world_evil: None,
             enable_whitelist: get_bool(settings, "EnableWhitelist"),
             pvp_mode: get_string(settings, "PvPMode"),
             spawn_protection: get_bool(settings, "SpawnProtection"),
@@ -297,6 +299,7 @@ impl Default for ServerConfig {
             world_width: None,
             world_height: None,
             seed: None,
+            world_evil: None,
             enable_whitelist: None,
             pvp_mode: Some("normal".to_string()),
             spawn_protection: Some(true),

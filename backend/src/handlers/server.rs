@@ -396,6 +396,7 @@ fn write_server_config_file(
     password: &Option<String>,
     difficulty: Option<u32>,
     seed: &Option<String>,
+    world_evil: Option<i32>,
 ) -> Result<String, AppError> {
     let mut lines = Vec::new();
     lines.push(format!("worldpath={}", server_dir.join("world").display()));
@@ -421,6 +422,9 @@ fn write_server_config_file(
         lines.push(format!("autocreate={}", size));
         lines.push(format!("worldname={}", world_name.trim_end_matches(".wld")));
         lines.push(format!("difficulty={}", difficulty.unwrap_or(0)));
+        if let Some(evil) = world_evil {
+            lines.push(format!("worldevil={}", evil));
+        }
         if let Some(seed) = seed {
             if !seed.is_empty() {
                 lines.push(format!("seed={}", seed));
@@ -1369,7 +1373,7 @@ pub async fn start_server(
     });
 
     // Read TShock config for autocreate settings (world size)
-    let (autocreate, world_name_for_create, difficulty, seed) = if world_path.is_none() {
+    let (autocreate, world_name_for_create, difficulty, seed, world_evil) = if world_path.is_none() {
         if let Some(panel_config) = panel_config.as_ref() {
             let auto = panel_config.auto_create.unwrap_or(false);
             let size = map_world_width_to_autocreate(panel_config.world_width.map(|v| v as u64));
@@ -1380,9 +1384,10 @@ pub async fn start_server(
                 .or_else(|| Some(effective_server_name.clone()));
             let difficulty = panel_config.difficulty;
             let seed = panel_config.seed.clone();
+            let world_evil = panel_config.world_evil;
 
             if auto {
-                (Some(size), wn, difficulty, seed)
+                (Some(size), wn, difficulty, seed, world_evil)
             } else {
                 return Err(AppError::BadRequest(
                     "当前没有可用世界存档，且未开启“自动创建世界”。请先导入/选择存档，或在配置中开启自动创建世界。".to_string(),
@@ -1410,18 +1415,23 @@ pub async fn start_server(
                     .get("seed")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                (Some(size), wn, difficulty, seed)
+                let world_evil = config
+                    .get("world_evil")
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v as i32);
+                (Some(size), wn, difficulty, seed, world_evil)
             } else {
                 (
                     Some(2),
                     world_name_clone.or_else(|| Some(effective_server_name.clone())),
                     Some(0),
                     None,
+                    None,
                 )
             }
         }
     } else {
-        (None, None, None, None)
+        (None, None, None, None, None)
     };
 
     let server_config_path = write_server_config_file(
@@ -1434,6 +1444,7 @@ pub async fn start_server(
         &effective_password,
         difficulty,
         &seed,
+        world_evil,
     )?;
 
     tracing::debug!(
