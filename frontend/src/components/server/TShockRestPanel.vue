@@ -291,8 +291,24 @@
             <n-button size="small" type="success" @click="applyBuffPack" :disabled="!quickCmdPlayer || quickCmdLoading">
               一键常用 Buff
             </n-button>
+            <n-button size="small" type="success" secondary @click="applyAllPositiveBuffs" :disabled="!quickCmdPlayer || quickCmdLoading">
+              一键全部正向 Buff
+            </n-button>
+            <n-button size="small" type="warning" @click="clearKnownBuffs" :disabled="!quickCmdPlayer || quickCmdLoading">
+              清除 Buff
+            </n-button>
           </div>
           <p class="hint-text">Buff ID 来源：Terraria 官方 Wiki Buff IDs。下拉内置常用项，也可以直接输入 Wiki 上的任意 Buff ID。</p>
+        </div>
+
+        <div class="quick-cmd-group">
+          <h4>玩家模式</h4>
+          <div class="world-actions compact">
+            <n-button size="small" type="success" @click="toggleGodmode" :disabled="!quickCmdPlayer || quickCmdLoading">God 模式 (切换)</n-button>
+            <n-button size="small" type="info" @click="healPlayer" :disabled="!quickCmdPlayer || quickCmdLoading">满血满蓝</n-button>
+            <n-button size="small" @click="slapPlayerNoDamage" :disabled="!quickCmdPlayer || quickCmdLoading">拍打 (不伤害)</n-button>
+          </div>
+          <p class="hint-text">目标为上方选择的在线玩家；Godmode 使用 TShock `/godmode`，治疗使用 `/heal`，拍打使用 `/slap 玩家 0`。</p>
         </div>
 
         <div class="quick-cmd-group">
@@ -302,9 +318,10 @@
             <n-button size="small" @click="quickCmd('/time 00:00')" :disabled="quickCmdLoading">午夜</n-button>
             <n-button size="small" @click="quickCmd('/time 04:30')" :disabled="quickCmdLoading">黎明</n-button>
             <n-button size="small" @click="quickCmd('/time 19:30')" :disabled="quickCmdLoading">黄昏</n-button>
+            <n-button size="small" type="info" @click="quickCmd('/worldevent rain')" :disabled="quickCmdLoading">开始下雨</n-button>
             <n-button size="small" @click="quickCmd('/wind 0')" :disabled="quickCmdLoading">无风</n-button>
           </div>
-          <p class="hint-text">TShock 当前版本提示 `/time` 必须使用 24 小时 `hh:mm` 格式，所以这里不再发送 dawn/dusk 字符串。</p>
+          <p class="hint-text">TShock 当前版本提示 `/time` 必须使用 24 小时 `hh:mm` 格式；降雨使用官方权限文档里的 `/worldevent rain`。REST 没有稳定的“停止下雨”端点。</p>
         </div>
 
         <div class="quick-cmd-group">
@@ -314,7 +331,7 @@
             <n-button size="small" @click="handleBloodmoon(false)" :loading="actionLoading.bloodmoonOff">关闭血月</n-button>
             <n-button size="small" type="info" @click="handleMeteor" :loading="actionLoading.meteor">召唤陨石</n-button>
           </div>
-          <p class="hint-text">官方 REST 只稳定暴露血月、陨石、保存、屠夫、自动保存等世界端点。入侵/日食/雨通常需要游戏内命令或插件，面板不再发送会失败的 rawcmd。</p>
+          <p class="hint-text">官方 REST 只稳定暴露血月、陨石、保存、屠夫、自动保存等世界端点。入侵/日食等通常需要游戏内命令或插件，面板不再发送会失败的 rawcmd。</p>
         </div>
 
         <div class="quick-cmd-group">
@@ -557,12 +574,18 @@ const buffOptions = TERRARIA_BUFFS.map((buff) => ({
   value: buff.id,
 }))
 
+const positiveBuffIds = computed(() => TERRARIA_BUFFS
+  .filter(item => item.type === 'Buff' && item.id !== 114)
+  .map(item => item.id)
+)
+
 const ONE_CLICK_BUFF_IDS = [
   2,   // Regeneration
   3,   // Swiftness
   5,   // Ironskin
   6,   // Mana Regeneration
   7,   // Magic Power
+  8,   // Featherfall
   9,   // Spelunker
   11,  // Shine
   12,  // Night Owl
@@ -576,7 +599,6 @@ const ONE_CLICK_BUFF_IDS = [
   111, // Dangersense
   112, // Ammo Reservation
   113, // Lifeforce
-  114, // Endurance
   115, // Rage
   117, // Wrath
 ]
@@ -613,6 +635,10 @@ function restBusinessFailed(data: any): boolean {
 
 function notificationText(text: string) {
   return text.length > 220 ? `${text.slice(0, 220)}...` : text
+}
+
+function quoteCommandArg(value: string) {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 }
 
 const itemOptions = computed(() => items.value.map((item) => ({
@@ -986,21 +1012,50 @@ function applySelectedBuff() {
     notification.error('Buff ID 无效', '请选择列表中的 Buff，或输入一个正整数 ID')
     return
   }
-  quickCmd(`/gbuff ${quickCmdPlayer.value} ${buffId} ${customBuffDuration.value}`)
+  quickCmd(`/gbuff ${quoteCommandArg(quickCmdPlayer.value)} ${buffId} ${customBuffDuration.value}`)
+}
+
+function toggleGodmode() {
+  const player = quickCmdPlayer.value.trim()
+  if (!player) return
+  quickCmd(`/godmode ${quoteCommandArg(player)}`)
+}
+
+function healPlayer() {
+  const player = quickCmdPlayer.value.trim()
+  if (!player) return
+  quickCmd(`/heal ${quoteCommandArg(player)}`)
+}
+
+function slapPlayerNoDamage() {
+  const player = quickCmdPlayer.value.trim()
+  if (!player) return
+  quickCmd(`/slap ${quoteCommandArg(player)} 0`)
 }
 
 async function applyBuffPack() {
   const player = quickCmdPlayer.value.trim()
   if (!player) return
 
+  await applyBuffIds(player, ONE_CLICK_BUFF_IDS, '一键常用 Buff')
+}
+
+async function applyAllPositiveBuffs() {
+  const player = quickCmdPlayer.value.trim()
+  if (!player) return
+
+  await applyBuffIds(player, positiveBuffIds.value, '一键全部正向 Buff')
+}
+
+async function applyBuffIds(player: string, buffIds: number[], actionName: string) {
   quickCmdLoading.value = true
   const results: string[] = []
   let failed = 0
 
-  for (const buffId of ONE_CLICK_BUFF_IDS) {
+  for (const buffId of buffIds) {
     const buff = TERRARIA_BUFFS.find(item => item.id === buffId)
     const label = buff ? `${buff.zh}/${buff.name}` : `Buff ${buffId}`
-    const cmd = `/gbuff ${player} ${buffId} ${customBuffDuration.value}`
+    const cmd = `/gbuff ${quoteCommandArg(player)} ${buffId} ${customBuffDuration.value}`
     try {
       const resp = await tshockRestApi.serverRawcmd(props.serverId, cmd)
       const data = resp.data as any
@@ -1019,9 +1074,47 @@ async function applyBuffPack() {
 
   quickCmdResult.value = results.join('\n')
   if (failed > 0) {
-    notification.error('一键 Buff 部分失败', notificationText(`失败 ${failed}/${ONE_CLICK_BUFF_IDS.length} 项，详见命令输出`))
+    notification.error(`${actionName} 部分失败`, notificationText(`失败 ${failed}/${buffIds.length} 项，详见命令输出`))
   } else {
-    notification.success('一键 Buff 已施加', notificationText(`已给 ${player} 施加 ${ONE_CLICK_BUFF_IDS.length} 个常用 Buff`))
+    notification.success(`${actionName} 已施加`, notificationText(`已给 ${player} 施加 ${buffIds.length} 个 Buff`))
+  }
+  quickCmdLoading.value = false
+}
+
+async function clearKnownBuffs() {
+  const player = quickCmdPlayer.value.trim()
+  if (!player) return
+
+  quickCmdLoading.value = true
+  const results: string[] = []
+  let failed = 0
+  const buffIds = positiveBuffIds.value
+
+  for (const buffId of buffIds) {
+    const buff = TERRARIA_BUFFS.find(item => item.id === buffId)
+    const label = buff ? `${buff.zh}/${buff.name}` : `Buff ${buffId}`
+    const cmd = `/gbuff ${quoteCommandArg(player)} ${buffId} 1`
+    try {
+      const resp = await tshockRestApi.serverRawcmd(props.serverId, cmd)
+      const data = resp.data as any
+      const message = restResponseText(data) || JSON.stringify(data, null, 2)
+      if (restBusinessFailed(data)) {
+        failed += 1
+        results.push(`失败 #${buffId} ${label}: ${message}`)
+      } else {
+        results.push(`已设置 1 秒 #${buffId} ${label}: ${message || 'OK'}`)
+      }
+    } catch (e: any) {
+      failed += 1
+      results.push(`失败 #${buffId} ${label}: ${e?.response?.data?.error || e?.message || '请求失败'}`)
+    }
+  }
+
+  quickCmdResult.value = results.join('\n')
+  if (failed > 0) {
+    notification.error('清除 Buff 部分失败', notificationText(`失败 ${failed}/${buffIds.length} 项，详见命令输出`))
+  } else {
+    notification.success('清除 Buff 已发送', notificationText(`已把 ${player} 的 ${buffIds.length} 个已知正面 Buff 设置为 1 秒`))
   }
   quickCmdLoading.value = false
 }
