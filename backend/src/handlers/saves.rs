@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Multipart, Path, State},
+    extract::{Multipart, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     Json,
@@ -15,6 +15,18 @@ fn is_allowed_save_name(name: &str) -> bool {
     name.ends_with(".wld") || name.ends_with(".wld.bak") || name.ends_with(".bak")
 }
 
+fn save_source_type(name: &str, source_server_id: Option<&String>) -> String {
+    if source_server_id.is_none() {
+        return "manual_upload".to_string();
+    }
+
+    if name.ends_with(".zip") {
+        "server_archive".to_string()
+    } else {
+        "server_backup".to_string()
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SaveInfo {
     pub id: String,
@@ -22,11 +34,21 @@ pub struct SaveInfo {
     pub file_path: String,
     pub file_size: u64,
     pub source_server_id: Option<String>,
+    pub source_server_name: Option<String>,
+    pub source_type: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SaveListQuery {
+    pub server_id: Option<String>,
+    #[serde(default)]
+    pub include_other_servers: bool,
 }
 
 pub async fn list_saves(
     State(state): State<AppState>,
+    Query(query): Query<SaveListQuery>,
     _auth: Auth,
 ) -> Result<Json<Vec<SaveInfo>>, AppError> {
     tracing::debug!("Listing saves");
@@ -35,21 +57,51 @@ pub async fn list_saves(
         AppError::InternalServerError("Failed to acquire database lock".to_string())
     })?;
 
+    let sql = if query.server_id.is_some() && !query.include_other_servers {
+        r#"
+        SELECT sv.id, sv.name, sv.file_path, sv.file_size, sv.source_server_id, s.name, sv.created_at
+        FROM saves sv
+        LEFT JOIN servers s ON s.id = sv.source_server_id
+        WHERE sv.source_server_id IS NULL OR sv.source_server_id = ?1
+        ORDER BY sv.created_at DESC
+        "#
+    } else {
+        r#"
+        SELECT sv.id, sv.name, sv.file_path, sv.file_size, sv.source_server_id, s.name, sv.created_at
+        FROM saves sv
+        LEFT JOIN servers s ON s.id = sv.source_server_id
+        ORDER BY sv.created_at DESC
+        "#
+    };
+
     let mut stmt = db
-        .prepare("SELECT id, name, file_path, file_size, source_server_id, created_at FROM saves")
+        .prepare(sql)
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
-    let saves = stmt
-        .query_map([], |row| {
-            Ok(SaveInfo {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                file_path: row.get(2)?,
-                file_size: row.get::<_, i64>(3)? as u64,
-                source_server_id: row.get(4)?,
-                created_at: row.get(5)?,
-            })
+    let map_row = |row: &rusqlite::Row<'_>| {
+        let source_server_id: Option<String> = row.get(4)?;
+        let name: String = row.get(1)?;
+        Ok(SaveInfo {
+            id: row.get(0)?,
+            source_type: save_source_type(&name, source_server_id.as_ref()),
+            name,
+            file_path: row.get(2)?,
+            file_size: row.get::<_, i64>(3)? as u64,
+            source_server_name: row.get(5)?,
+            source_server_id,
+            created_at: row.get(6)?,
         })
+    };
+
+    let saves = if let Some(server_id) = query.server_id.as_deref() {
+        if query.include_other_servers {
+            stmt.query_map([], map_row)
+        } else {
+            stmt.query_map(params![server_id], map_row)
+        }
+    } else {
+        stmt.query_map([], map_row)
+    }
         .map_err(|e| AppError::DatabaseError(e.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
@@ -114,6 +166,8 @@ pub async fn upload_save(
             file_path: saved.file_path,
             file_size: saved.file_size,
             source_server_id: None,
+            source_server_name: None,
+            source_type: "manual_upload".to_string(),
             created_at: created_at.clone(),
         };
 
@@ -187,6 +241,12 @@ pub async fn import_save(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(|_| AppError::NotFound("Save not found".to_string()))?;
+
+    if !is_allowed_save_name(&save_name) {
+        return Err(AppError::BadRequest(
+            "归档包只能下载，不能直接导入为世界存档。请解压后选择其中的 .wld 文件导入。".to_string(),
+        ));
+    }
 
     tracing::debug!(
         save_id = %save_id,
@@ -375,8 +435,22 @@ pub async fn backup_server(
         )
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
-        tracing::info!(server_id = %server_id, world_name = %world_name, "Server backed up successfully");
         drop(db);
+
+        crate::services::auto_backup::sync_backup_to_oss(
+            &state.config.backup.oss,
+            &backup.file_path,
+            &backup.name,
+        );
+        if state.config.backup.local_retention_days > 0 {
+            crate::services::auto_backup::prune_backups_older_than(
+                &state.db,
+                &server_id,
+                state.config.backup.local_retention_days,
+            );
+        }
+
+        tracing::info!(server_id = %server_id, world_name = %world_name, "Server backed up successfully");
         crate::db::log_operation(
             &state.db,
             &auth.user_id,

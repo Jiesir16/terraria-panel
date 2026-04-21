@@ -247,6 +247,7 @@
             key-field="key"
             label-field="label"
             children-field="children"
+            :render-label="renderTreeLabel"
             block-line
             virtual-scroll
             style="max-height: 420px;"
@@ -360,6 +361,7 @@ import {
   ALL_PERMISSION_KEYS,
   type PermissionNode,
 } from '../../constants/tshockPermissions'
+import { PERMISSION_DESCRIPTIONS } from '../../constants/tshockPermissionDescriptions'
 
 const props = defineProps<{ serverId: string }>()
 
@@ -508,6 +510,39 @@ const extraPerms = computed(() =>
   editingGroupPerms.value.filter(p => !allLeafKeys.has(p)).sort()
 )
 
+function permissionSearchText(node: PermissionNode) {
+  const doc = PERMISSION_DESCRIPTIONS[node.key]
+  return [
+    node.key,
+    node.label,
+    doc?.descriptionZh,
+    doc?.descriptionEn,
+    doc?.commands,
+  ].filter(Boolean).join(' ').toLowerCase()
+}
+
+function renderPermissionTreeLabel(node: PermissionNode) {
+  const doc = PERMISSION_DESCRIPTIONS[node.key]
+  const isLeaf = !node.children?.length
+
+  return h('div', { class: 'permission-tree-label' }, [
+    h('div', { class: 'permission-tree-main' }, [
+      h('span', { class: 'permission-tree-title' }, node.label),
+      isLeaf ? h('code', { class: 'permission-tree-key' }, node.key) : null,
+    ]),
+    doc?.descriptionZh ? h('div', { class: 'permission-tree-desc zh' }, doc.descriptionZh) : null,
+    doc ? h('div', { class: 'permission-tree-desc' }, doc.descriptionEn) : null,
+    doc?.commands && doc.commands !== 'None'
+      ? h('div', { class: 'permission-tree-commands' }, `Commands: ${doc.commands}`)
+      : null,
+  ])
+}
+
+function renderTreeLabel({ option }: { option: TreeOption }) {
+  const node = (option as any).permissionNode as PermissionNode | undefined
+  return node ? renderPermissionTreeLabel(node) : String(option.label || '')
+}
+
 /** Convert PermissionNode[] to NTree TreeOption[], with search filtering */
 function toTreeOptions(nodes: PermissionNode[], filter: string): TreeOption[] {
   const result: TreeOption[] = []
@@ -515,19 +550,21 @@ function toTreeOptions(nodes: PermissionNode[], filter: string): TreeOption[] {
     if (node.children && node.children.length > 0) {
       const children = toTreeOptions(node.children, filter)
       // If filter active and no children match, skip this branch
-      if (filter && children.length === 0) continue
+      if (filter && children.length === 0 && !permissionSearchText(node).includes(filter)) continue
       result.push({
         key: node.key,
-        label: `${node.label}`,
+        label: node.label,
+        permissionNode: node,
         children,
-      })
+      } as TreeOption)
     } else {
       // Leaf node — apply filter
-      if (filter && !node.key.includes(filter) && !node.label.includes(filter)) continue
+      if (filter && !permissionSearchText(node).includes(filter)) continue
       result.push({
         key: node.key,
-        label: `${node.label}  (${node.key})`,
-      })
+        label: node.label,
+        permissionNode: node,
+      } as TreeOption)
     }
   }
   return result
@@ -1120,6 +1157,40 @@ defineExpose({ loadAll })
   border-radius: 8px;
   padding: 8px;
   background: var(--bg-body);
+}
+
+.permission-tree-label {
+  padding: 4px 0;
+  line-height: 1.35;
+}
+
+.permission-tree-main {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.permission-tree-title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.permission-tree-key {
+  font-size: 12px;
+  color: var(--text-muted);
+  background: transparent;
+}
+
+.permission-tree-desc,
+.permission-tree-commands {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.permission-tree-desc.zh {
+  color: var(--text-primary);
 }
 
 .extra-perms {

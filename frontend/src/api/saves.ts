@@ -6,6 +6,8 @@ export interface SaveInfo {
   file_path: string
   file_size: number
   source_server_id?: string
+  source_server_name?: string
+  source_type?: 'manual_upload' | 'server_backup' | 'server_archive'
   created_at: string
 }
 
@@ -15,8 +17,8 @@ export interface SaveUploadResponse {
 }
 
 export const savesApi = {
-  getList: () =>
-    api.get<SaveInfo[]>('/saves'),
+  getList: (params?: { server_id?: string; include_other_servers?: boolean }) =>
+    api.get<SaveInfo[]>('/saves', { params }),
 
   upload: (file: File) => {
     const formData = new FormData()

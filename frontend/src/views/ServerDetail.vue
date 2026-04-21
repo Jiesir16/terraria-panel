@@ -85,22 +85,51 @@
           <div class="saves-section">
             <div class="section-header">
               <h3>世界存档</h3>
-              <n-button v-if="authStore.isOperator" text type="primary" @click="handleBackup">
-                + 手动备份
-              </n-button>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <n-button v-if="authStore.isOperator && !includeOtherSaves" text type="info" @click="loadOtherSaves">
+                  加载其他服务器存档
+                </n-button>
+                <n-button v-if="authStore.isOperator" text type="primary" @click="handleBackup">
+                  + 手动备份
+                </n-button>
+              </div>
             </div>
+            <p class="hint-text">
+              默认只展示本服务备份和手动导入存档；需要跨服导入时再加载其他服务器存档。
+            </p>
             <n-spin :show="savesLoading">
-              <div class="saves-list">
-                <save-card
-                  v-for="save in saves"
-                  :key="save.id"
-                  :save="save"
-                  :server-id="serverId"
-                  :can-manage="authStore.isOperator"
-                  @import="() => handleImportSave(save.id)"
-                  @delete="() => handleDeleteSave(save.id)"
-                  @download="() => handleDownloadSave(save)"
-                />
+              <div v-if="saves.length === 0" class="empty-note">暂无可用存档</div>
+              <div v-else class="save-category-list">
+                <div v-if="categorizedServerSaves.manual.length > 0" class="save-category">
+                  <h4>手动导入</h4>
+                  <div class="saves-list">
+                    <save-card
+                      v-for="save in categorizedServerSaves.manual"
+                      :key="save.id"
+                      :save="save"
+                      :server-id="serverId"
+                      :can-manage="authStore.isOperator"
+                      @import="() => confirmImportSave(save)"
+                      @delete="() => handleDeleteSave(save.id)"
+                      @download="() => handleDownloadSave(save)"
+                    />
+                  </div>
+                </div>
+                <div v-for="group in categorizedServerSaves.servers" :key="group.id" class="save-category">
+                  <h4>{{ group.name }}</h4>
+                  <div class="saves-list">
+                    <save-card
+                      v-for="save in group.saves"
+                      :key="save.id"
+                      :save="save"
+                      :server-id="serverId"
+                      :can-manage="authStore.isOperator"
+                      @import="() => confirmImportSave(save)"
+                      @delete="() => handleDeleteSave(save.id)"
+                      @download="() => handleDownloadSave(save)"
+                    />
+                  </div>
+                </div>
               </div>
             </n-spin>
           </div>
@@ -139,6 +168,7 @@ const serverId = computed(() => route.params.id as string)
 const loading = ref(false)
 const modsLoading = ref(false)
 const savesLoading = ref(false)
+const includeOtherSaves = ref(false)
 const showModUpload = ref(false)
 const mods = ref<any[]>([])
 const saves = ref<any[]>([])
@@ -150,6 +180,34 @@ const serverMissingHandled = ref(false)
 const currentServer = computed(() => serversStore.currentServer)
 
 const isCurrentServerActive = computed(() => currentServer.value?.status !== 'stopped')
+
+const categorizedServerSaves = computed(() => {
+  const manual: any[] = []
+  const groups = new Map<string, { id: string; name: string; saves: any[] }>()
+  const currentName = currentServer.value?.name || '本服务备份'
+
+  for (const save of saves.value) {
+    if (!save.source_server_id) {
+      manual.push(save)
+      continue
+    }
+
+    const id = save.source_server_id
+    const name = id === serverId.value ? currentName : (save.source_server_name || `服务器 ${id}`)
+    if (!groups.has(id)) {
+      groups.set(id, { id, name, saves: [] })
+    }
+    groups.get(id)!.saves.push(save)
+  }
+
+  const servers = Array.from(groups.values()).sort((a, b) => {
+    if (a.id === serverId.value) return -1
+    if (b.id === serverId.value) return 1
+    return a.name.localeCompare(b.name)
+  })
+
+  return { manual, servers }
+})
 
 function clearStatusPoll() {
   if (statusPollTimer) {
@@ -225,13 +283,21 @@ async function loadMods() {
 async function loadSaves() {
   savesLoading.value = true
   try {
-    const response = await savesApi.getList()
+    const response = await savesApi.getList({
+      server_id: serverId.value,
+      include_other_servers: includeOtherSaves.value,
+    })
     saves.value = response.data
   } catch (error) {
     notification.error('加载存档失败', '')
   } finally {
     savesLoading.value = false
   }
+}
+
+async function loadOtherSaves() {
+  includeOtherSaves.value = true
+  await loadSaves()
 }
 
 const startLoading = ref(false)
@@ -357,6 +423,25 @@ async function handleDeleteMod(modName: string) {
   } catch (error: any) {
     notification.error('删除失败', error?.response?.data?.message || '')
   }
+}
+
+function confirmImportSave(save: any) {
+  if (save.source_type === 'server_archive' || save.name?.endsWith('.zip')) {
+    notification.warning('归档包不能直接导入', '请先下载并解压，再导入其中的 .wld 文件')
+    return
+  }
+
+  const source = save.source_server_id
+    ? (save.source_server_id === serverId.value ? '本服务备份' : `其他服务器备份：${save.source_server_name || save.source_server_id}`)
+    : '手动导入存档'
+
+  dialog.warning({
+    title: '确认导入存档',
+    content: `导入会覆盖当前服务器启动世界并把「${save.name}」设为启动存档。来源：${source}。建议先确认当前服务器已停止或已完成备份。`,
+    positiveText: '导入',
+    negativeText: '取消',
+    onPositiveClick: () => handleImportSave(save.id),
+  })
 }
 
 async function handleImportSave(saveId: string) {
@@ -489,6 +574,23 @@ onUnmounted(() => {
 
 .section-header h3 {
   margin: 0;
+  color: var(--text-primary);
+}
+
+.hint-text {
+  margin: -8px 0 14px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.save-category-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.save-category h4 {
+  margin: 0 0 10px;
   color: var(--text-primary);
 }
 
