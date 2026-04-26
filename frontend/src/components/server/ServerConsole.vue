@@ -1,5 +1,26 @@
 <template>
   <div class="console-container">
+    <div class="console-status-bar">
+      <span :class="connected ? 'status-connected' : 'status-disconnected'">
+        {{ connected ? '已连接' : '未连接' }}
+      </span>
+      <n-select
+        v-model:value="historyLines"
+        size="tiny"
+        :options="historyOptions"
+        style="width: 120px"
+      />
+      <n-button text type="primary" size="tiny" @click="handleReloadHistory">
+        刷新日志
+      </n-button>
+      <n-button text size="tiny" @click="clearMessages">
+        清空
+      </n-button>
+      <n-button v-if="!connected" text type="primary" size="tiny" @click="handleReconnect">
+        重新连接
+      </n-button>
+    </div>
+
     <div class="console-output" ref="consoleRef">
       <div class="console-terminal">
         <div
@@ -16,26 +37,26 @@
     </div>
 
     <div class="console-input">
-      <n-space>
-        <n-button text type="primary" size="small" @click="sendCommand('/save')">
-          /save
-        </n-button>
-        <n-button text type="primary" size="small" @click="sendCommand('/kick')">
-          /kick
-        </n-button>
-        <n-button text type="primary" size="small" @click="sendCommand('/ban')">
-          /ban
-        </n-button>
-        <n-button text type="primary" size="small" @click="sendCommand('/who')">
-          /who
-        </n-button>
-        <n-button text type="primary" size="small" @click="sendCommand('/time day')">
-          Day
-        </n-button>
-        <n-button text type="primary" size="small" @click="sendCommand('/time night')">
-          Night
-        </n-button>
-      </n-space>
+      <!-- 基础命令（所有人可见） -->
+      <div
+        v-for="section in visibleCommandSections"
+        :key="section.label"
+        class="command-section"
+      >
+        <span class="command-label">{{ section.label }}</span>
+        <n-space size="small" :wrap="true">
+          <n-button
+            v-for="item in section.items"
+            :key="`${section.label}-${item.command}`"
+            text
+            :type="item.color"
+            size="small"
+            @click="sendCommand(item.command)"
+          >
+            {{ item.label }}
+          </n-button>
+        </n-space>
+      </div>
 
       <div class="input-row">
         <n-input
@@ -43,8 +64,9 @@
           v-model:value="commandInput"
           placeholder="输入命令..."
           :on-keyup="handleKeyup"
+          :disabled="!connected"
         />
-        <n-button type="primary" @click="sendCurrentCommand">
+        <n-button type="primary" @click="sendCurrentCommand" :disabled="!connected">
           发送
         </n-button>
       </div>
@@ -53,10 +75,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick, onUnmounted } from 'vue'
-import { NInput, NButton, NSpace } from 'naive-ui'
+import { computed, ref, nextTick, watch, onMounted, onUnmounted } from 'vue'
+import { NInput, NButton, NSpace, NSelect } from 'naive-ui'
 import { useWebSocket } from '../../composables/useWebSocket'
 import { useNotification } from '../../composables/useNotification'
+import { useAuthStore } from '../../stores/auth'
+import { useServersStore } from '../../stores/servers'
+import { serverApi } from '../../api/server'
+import { SERVER_COMMAND_SECTIONS, type CommandScope } from '../../constants/serverCommands'
 
 interface Props {
   serverId: string
@@ -64,28 +90,89 @@ interface Props {
 
 const props = defineProps<Props>()
 const notification = useNotification()
+const authStore = useAuthStore()
+const serversStore = useServersStore()
 
 const consoleRef = ref<HTMLElement>()
 const inputRef = ref()
 const commandInput = ref('')
-const messages = ref<string[]>([])
 const commandHistory = ref<string[]>([])
 const historyIndex = ref(-1)
+const historyLines = ref(200)
+const historyOptions = [
+  { label: '最近 100 行', value: 100 },
+  { label: '最近 200 行', value: 200 },
+  { label: '最近 500 行', value: 500 },
+  { label: '最近 1000 行', value: 1000 }
+]
+const currentServer = computed(() => {
+  if (serversStore.currentServer?.id === props.serverId) {
+    return serversStore.currentServer
+  }
+  return serversStore.getServerById(props.serverId) || null
+})
+const isRealtimeAvailable = computed(() => {
+  const status = currentServer.value?.status
+  return status === 'starting' || status === 'running'
+})
+const isServerOwner = computed(() => currentServer.value?.created_by === authStore.user?.id)
+const visibleCommandSections = computed(() => {
+  const canUseScope = (scope: CommandScope) => {
+    switch (scope) {
+      case 'viewer':
+        return true
+      case 'operator':
+        return authStore.isOperator
+      case 'owner':
+        return authStore.isAdmin || isServerOwner.value
+      case 'admin':
+        return authStore.isAdmin
+    }
+  }
 
-const { sendCommand: wsSendCommand } = useWebSocket(
+  return SERVER_COMMAND_SECTIONS.filter(section => canUseScope(section.scope))
+})
+
+const { sendCommand: wsSendCommand, connected, messages, reconnect, disconnect, clearMessages } = useWebSocket(
   props.serverId,
   {
-    onMessage: (data) => {
-      messages.value.push(data)
+    historyLines: historyLines.value,
+    autoConnect: false,
+    onMessage: () => {
       nextTick(() => {
         scrollToBottom()
       })
     },
     onError: () => {
-      notification.error('连接错误', '无法连接到 WebSocket')
+      // Silently handle — status bar shows connection state
     }
   }
 )
+
+function handleReconnect() {
+  if (isRealtimeAvailable.value) {
+    reconnect()
+    notification.success('正在重新连接...', '')
+    return
+  }
+  handleReloadHistory()
+  notification.success('服务器未运行，已刷新历史日志', '')
+}
+
+async function handleReloadHistory() {
+  try {
+    const response = await serverApi.getRecentLogs(props.serverId, historyLines.value)
+    messages.value = response.data
+    nextTick(() => {
+      scrollToBottom()
+    })
+    if (isRealtimeAvailable.value && !connected.value) {
+      reconnect()
+    }
+  } catch (error: any) {
+    notification.error('刷新日志失败', error?.response?.data?.error || '')
+  }
+}
 
 function getLogClass(message: string): string {
   if (message.includes('error') || message.includes('Error')) {
@@ -108,6 +195,15 @@ function scrollToBottom() {
 
 function sendCommand(command: string) {
   commandInput.value = command
+  // For commands that typically need arguments, just fill the input
+  const needsArg = ['/kick', '/ban', '/mute', '/broadcast', '/give', '/gbuff']
+  if (needsArg.some(c => command === c)) {
+    // Focus the input so user can add arguments
+    nextTick(() => {
+      inputRef.value?.focus()
+    })
+    return
+  }
   nextTick(() => {
     sendCurrentCommand()
   })
@@ -145,13 +241,25 @@ function handleKeyup(e: KeyboardEvent) {
   }
 }
 
-onMounted(() => {
-  scrollToBottom()
-})
-
 onUnmounted(() => {
   // Cleanup is handled by useWebSocket
 })
+
+onMounted(() => {
+  handleReloadHistory()
+})
+
+watch(historyLines, () => {
+  handleReloadHistory()
+})
+
+watch(isRealtimeAvailable, (active) => {
+  if (active) {
+    reconnect()
+  } else {
+    disconnect()
+  }
+}, { immediate: true })
 </script>
 
 <style scoped>
@@ -164,6 +272,44 @@ onUnmounted(() => {
   border-radius: 12px;
   overflow: hidden;
   transition: background-color 0.3s, border-color 0.3s;
+}
+
+.console-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background-color: var(--bg-body);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 12px;
+}
+
+.status-connected {
+  color: #50C878;
+}
+
+.status-connected::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #50C878;
+  margin-right: 6px;
+}
+
+.status-disconnected {
+  color: #FF6B6B;
+}
+
+.status-disconnected::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #FF6B6B;
+  margin-right: 6px;
 }
 
 .console-output {
@@ -181,6 +327,7 @@ onUnmounted(() => {
   word-wrap: break-word;
   line-height: 1.5;
   font-size: 12px;
+  min-height: 100%;
 }
 
 .placeholder {
@@ -191,11 +338,24 @@ onUnmounted(() => {
 
 .console-input {
   border-top: 1px solid var(--border-color);
-  padding: 12px;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   background-color: var(--bg-card);
+}
+
+.command-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.command-label {
+  font-size: 11px;
+  color: var(--text-muted, #808080);
+  min-width: 28px;
+  font-weight: 600;
 }
 
 .input-row {

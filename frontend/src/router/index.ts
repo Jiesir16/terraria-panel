@@ -1,5 +1,8 @@
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router'
+import { createDiscreteApi } from 'naive-ui'
 import { useAuthStore } from '../stores/auth'
+
+const { loadingBar } = createDiscreteApi(['loadingBar'])
 
 const routes: RouteRecordRaw[] = [
   {
@@ -45,8 +48,32 @@ const routes: RouteRecordRaw[] = [
       },
       {
         path: 'settings',
-        name: 'Settings',
-        component: () => import('../views/Settings.vue')
+        component: () => import('../views/Settings.vue'),
+        redirect: '/settings/system',
+        children: [
+          {
+            path: 'system',
+            name: 'SettingsSystem',
+            component: () => import('../views/settings/SystemInfo.vue')
+          },
+          {
+            path: 'backup',
+            name: 'SettingsBackup',
+            component: () => import('../views/settings/BackupSettings.vue'),
+            meta: { requiresOperator: true }
+          },
+          {
+            path: 'frp',
+            name: 'SettingsFrp',
+            component: () => import('../views/settings/FrpSettings.vue'),
+            meta: { requiresOperator: true }
+          },
+          {
+            path: 'user',
+            name: 'SettingsUser',
+            component: () => import('../views/settings/UserInfo.vue')
+          }
+        ]
       },
       {
         path: 'users',
@@ -68,6 +95,8 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to, _from, next) => {
+  loadingBar.start()
+  
   const authStore = useAuthStore()
 
   authStore.initFromStorage()
@@ -81,7 +110,8 @@ router.beforeEach(async (to, _from, next) => {
   }
 
   const requiresAuth = to.meta.requiresAuth !== false
-  const requiresAdmin = to.meta.requiresAdmin === true
+  const requiresAdmin = to.matched.some(r => r.meta.requiresAdmin === true)
+  const requiresOperator = to.matched.some(r => r.meta.requiresOperator === true)
 
   if (requiresAuth && !authStore.isAuthenticated) {
     next('/login')
@@ -93,12 +123,25 @@ router.beforeEach(async (to, _from, next) => {
     return
   }
 
+  if (requiresOperator && !authStore.isOperator) {
+    next('/')
+    return
+  }
+
   if (to.path === '/login' && authStore.isAuthenticated) {
     next('/')
     return
   }
 
   next()
+})
+
+router.afterEach(() => {
+  loadingBar.finish()
+})
+
+router.onError(() => {
+  loadingBar.error()
 })
 
 export default router

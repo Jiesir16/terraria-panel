@@ -25,8 +25,9 @@ impl ModManager {
             .map_err(|e| AppError::FileError(format!("Failed to read plugins directory: {}", e)))?;
 
         for entry in entries {
-            let entry = entry
-                .map_err(|e| AppError::FileError(format!("Failed to read directory entry: {}", e)))?;
+            let entry = entry.map_err(|e| {
+                AppError::FileError(format!("Failed to read directory entry: {}", e))
+            })?;
             let path = entry.path();
 
             if path.is_file() {
@@ -42,18 +43,21 @@ impl ModManager {
                     filename.clone()
                 };
 
-                let metadata = std::fs::metadata(&path)
-                    .map_err(|e| AppError::FileError(format!("Failed to get file metadata: {}", e)))?;
+                let metadata = std::fs::metadata(&path).map_err(|e| {
+                    AppError::FileError(format!("Failed to get file metadata: {}", e))
+                })?;
 
                 let created_at = metadata
                     .modified()
                     .ok()
                     .and_then(|t| {
                         let duration = t.duration_since(std::time::SystemTime::UNIX_EPOCH).ok()?;
-                        chrono::DateTime::<Local>::from(std::time::SystemTime::UNIX_EPOCH + duration)
-                            .format("%Y-%m-%d %H:%M:%S")
-                            .to_string()
-                            .into()
+                        chrono::DateTime::<Local>::from(
+                            std::time::SystemTime::UNIX_EPOCH + duration,
+                        )
+                        .format("%Y-%m-%d %H:%M:%S")
+                        .to_string()
+                        .into()
                     })
                     .unwrap_or_else(|| "unknown".to_string());
 
@@ -165,7 +169,11 @@ impl ModManager {
     }
 
     pub fn get_server_plugins_path(&self, server_id: &str) -> Result<PathBuf, AppError> {
-        let plugins_path = self.data_dir.join("servers").join(server_id).join("ServerPlugins");
+        let plugins_path = self
+            .data_dir
+            .join("servers")
+            .join(server_id)
+            .join("ServerPlugins");
 
         if !plugins_path.exists() {
             std::fs::create_dir_all(&plugins_path).map_err(|e| {

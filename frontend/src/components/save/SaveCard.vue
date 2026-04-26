@@ -15,13 +15,17 @@
       </div>
       <div class="info-row" v-if="save.source_server_id">
         <span class="label">来源:</span>
-        <span class="value">{{ save.source_server_id }}</span>
+        <span class="value">{{ save.source_server_name || save.source_server_id }}</span>
+      </div>
+      <div class="info-row">
+        <span class="label">类型:</span>
+        <span class="value">{{ saveTypeLabel }}</span>
       </div>
     </div>
 
     <div class="save-actions">
       <n-button
-        v-if="serverId"
+        v-if="canImport"
         text
         type="primary"
         size="small"
@@ -38,6 +42,7 @@
         下载
       </n-button>
       <n-button
+        v-if="canManage"
         text
         type="error"
         size="small"
@@ -50,6 +55,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { NButton } from 'naive-ui'
 
 interface Props {
@@ -59,8 +65,11 @@ interface Props {
     file_size: number
     created_at: string
     source_server_id?: string
+    source_server_name?: string
+    source_type?: 'manual_upload' | 'server_backup' | 'server_archive'
   }
   serverId: string
+  canManage?: boolean
 }
 
 interface Emits {
@@ -69,8 +78,24 @@ interface Emits {
   (e: 'delete'): void
 }
 
-defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  canManage: true
+})
 defineEmits<Emits>()
+
+const isArchive = computed(() => {
+  return props.save.source_type === 'server_archive' || props.save.name.endsWith('.zip')
+})
+
+const canImport = computed(() => {
+  return Boolean(props.serverId && props.canManage && !isArchive.value)
+})
+
+const saveTypeLabel = computed(() => {
+  if (isArchive.value) return '服务器备份归档包'
+  if (props.save.source_server_id) return '服务器备份'
+  return '手动导入'
+})
 
 function formatSize(bytes: number): string {
   if (bytes === 0) return '0 B'

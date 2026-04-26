@@ -8,6 +8,9 @@ export interface UseWebSocketOptions {
   onClose?: () => void
   reconnectAttempts?: number
   reconnectDelay?: number
+  historyLines?: number
+  /** If false, don't auto-connect on mount */
+  autoConnect?: boolean
 }
 
 export function useWebSocket(
@@ -20,31 +23,52 @@ export function useWebSocket(
   const messages = ref<string[]>([])
   let reconnectCount = 0
   let reconnectTimeout: ReturnType<typeof setTimeout> | null = null
+  let stopped = false
 
-  const reconnectAttempts = options.reconnectAttempts ?? 5
+  const reconnectAttempts = options.reconnectAttempts ?? 3
   const reconnectDelay = options.reconnectDelay ?? 3000
+  const historyLines = options.historyLines ?? 200
+  const autoConnect = options.autoConnect ?? true
 
   function connect() {
-    if (ws.value?.readyState === WebSocket.OPEN) {
+    if (stopped) return
+    if (ws.value?.readyState === WebSocket.OPEN || ws.value?.readyState === WebSocket.CONNECTING) {
       return
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const url = `${protocol}//${window.location.host}/api/servers/${serverId}/console`
+    // Pass JWT token as query parameter — backend expects ?token=xxx
+    const token = authStore.token || ''
+    // In dev mode, connect directly to backend (port 3000) to avoid Vite proxy issues;
+    // in production, the frontend is served by the backend so use same host
+    const wsHost = import.meta.env.DEV ? `${window.location.hostname}:3000` : window.location.host
+    const url = `${protocol}//${wsHost}/api/servers/${serverId}/console?token=${encodeURIComponent(token)}&history=${historyLines}`
 
-    ws.value = new WebSocket(url)
+    try {
+      ws.value = new WebSocket(url)
+    } catch {
+      return
+    }
 
     ws.value.onopen = () => {
       connected.value = true
       reconnectCount = 0
-      if (authStore.token) {
-        ws.value?.send(JSON.stringify({ type: 'auth', token: authStore.token }))
-      }
       options.onOpen?.()
     }
 
     ws.value.onmessage = (event) => {
-      const message = event.data
+      const raw = event.data
+      // Backend sends JSON: {"type":"log","data":"..."}
+      // Parse it and extract the log line
+      let message = raw
+      try {
+        const parsed = JSON.parse(raw)
+        if (parsed.type === 'log' && typeof parsed.data === 'string') {
+          message = parsed.data
+        }
+      } catch {
+        // Not JSON, use raw string
+      }
       messages.value.push(message)
       options.onMessage?.(message)
     }
@@ -58,7 +82,8 @@ export function useWebSocket(
       connected.value = false
       options.onClose?.()
 
-      if (reconnectCount < reconnectAttempts) {
+      // Only reconnect if not manually stopped
+      if (!stopped && reconnectCount < reconnectAttempts) {
         reconnectCount++
         reconnectTimeout = setTimeout(() => {
           connect()
@@ -69,7 +94,8 @@ export function useWebSocket(
 
   function sendCommand(command: string) {
     if (ws.value?.readyState === WebSocket.OPEN) {
-      ws.value.send(JSON.stringify({ type: 'command', data: command }))
+      // Backend expects: {"command": "the command"} or raw text
+      ws.value.send(JSON.stringify({ command }))
     }
   }
 
@@ -78,8 +104,10 @@ export function useWebSocket(
   }
 
   function disconnect() {
+    stopped = true
     if (reconnectTimeout) {
       clearTimeout(reconnectTimeout)
+      reconnectTimeout = null
     }
     if (ws.value) {
       ws.value.close()
@@ -88,8 +116,17 @@ export function useWebSocket(
     connected.value = false
   }
 
-  onMounted(() => {
+  /** Re-enable connection (e.g. after server starts) */
+  function reconnect() {
+    stopped = false
+    reconnectCount = 0
     connect()
+  }
+
+  onMounted(() => {
+    if (autoConnect) {
+      connect()
+    }
   })
 
   onUnmounted(() => {
@@ -102,6 +139,7 @@ export function useWebSocket(
     sendCommand,
     clearMessages,
     disconnect,
-    connect
+    connect,
+    reconnect
   }
 }

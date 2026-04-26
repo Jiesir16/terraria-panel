@@ -23,3 +23,6 @@ target
 /CODEX_HANDOFF.md
 /CLAUDE.md
 /Terraria_Console_Linux_使用手册.docx
+/backend/data/*
+.idea
+/frontend/package-lock.json
