@@ -7,6 +7,8 @@ pub struct Config {
     pub auth: AuthConfig,
     pub tshock: TShockConfig,
     pub backup: BackupConfig,
+    #[serde(default)]
+    pub telegram: TelegramConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,6 +36,35 @@ pub struct TShockConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelegramConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub bot_token: String,
+    #[serde(default)]
+    pub allowed_chat_ids: Vec<i64>,
+    #[serde(default)]
+    pub admin_chat_ids: Vec<i64>,
+    #[serde(default = "default_telegram_poll_timeout_seconds")]
+    pub poll_timeout_seconds: u64,
+    #[serde(default = "default_telegram_retry_seconds")]
+    pub retry_seconds: u64,
+}
+
+impl Default for TelegramConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bot_token: String::new(),
+            allowed_chat_ids: Vec::new(),
+            admin_chat_ids: Vec::new(),
+            poll_timeout_seconds: default_telegram_poll_timeout_seconds(),
+            retry_seconds: default_telegram_retry_seconds(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupConfig {
     #[serde(default = "default_backup_enabled")]
     pub enabled: bool,
@@ -43,6 +74,8 @@ pub struct BackupConfig {
     pub max_backups_per_server: usize,
     #[serde(default = "default_local_retention_days")]
     pub local_retention_days: u64,
+    #[serde(default = "default_backup_ssc")]
+    pub backup_ssc: bool,
     #[serde(default = "default_archive_daily_enabled")]
     pub archive_daily_enabled: bool,
     #[serde(default = "default_archive_hour")]
@@ -173,12 +206,34 @@ default_port_range_start = 7777
 # 自动分配服务器端口的结束端口。
 default_port_range_end = 7800
 
+[telegram]
+# 是否启用 Telegram Bot 远程管理。启用前必须设置 bot_token 和 chat_id 白名单。
+enabled = false
+
+# 从 @BotFather 获取的 Bot Token。不要提交到公开仓库。
+bot_token = ""
+
+# 允许使用基础管理命令的 chat_id。支持个人、群组或频道 ID。
+allowed_chat_ids = []
+
+# 管理员 chat_id。这里的用户会按面板 admin 权限执行命令；也会自动视为 allowed。
+admin_chat_ids = []
+
+# Telegram getUpdates 长轮询超时，单位秒。
+poll_timeout_seconds = 25
+
+# 网络错误后的重试间隔，单位秒。
+retry_seconds = 5
+
 [backup]
 # 是否启用自动备份任务。
 enabled = true
 
 # 自动备份间隔，单位分钟。60 表示每小时生成一次世界存档备份。
 interval_minutes = 60
+
+# 自动备份时是否同时备份 SSC 数据库（tshock.sqlite）。
+backup_ssc = true
 
 # 每个服务器最多保留多少个未归档世界备份。
 # 0 表示不按数量裁剪。启用每日归档时建议保持 0，否则小时备份可能在归档前被提前删除。
@@ -233,6 +288,14 @@ fn default_backup_enabled() -> bool {
     true
 }
 
+fn default_telegram_poll_timeout_seconds() -> u64 {
+    25
+}
+
+fn default_telegram_retry_seconds() -> u64 {
+    5
+}
+
 fn default_backup_interval_minutes() -> u64 {
     60
 }
@@ -243,6 +306,10 @@ fn default_max_backups_per_server() -> usize {
 
 fn default_local_retention_days() -> u64 {
     30
+}
+
+fn default_backup_ssc() -> bool {
+    true
 }
 
 fn default_archive_daily_enabled() -> bool {
@@ -307,11 +374,13 @@ impl Default for Config {
                 interval_minutes: 60,
                 max_backups_per_server: 0,
                 local_retention_days: 30,
+                backup_ssc: true,
                 archive_daily_enabled: true,
                 archive_hour: 1,
                 archive_after_days: 2,
                 oss: OssBackupConfig::default(),
             },
+            telegram: TelegramConfig::default(),
         }
     }
 }

@@ -9,6 +9,12 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::services::{
+    auto_backup::{apply_backup_retention, sync_backup_to_oss},
+    backup_policy::{
+        load_global_backup_policy, load_server_backup_override, resolve_effective_backup_policy,
+    },
+};
 use crate::{auth::Auth, error::AppError, handlers::AppState};
 
 fn is_allowed_save_name(name: &str) -> bool {
@@ -102,9 +108,9 @@ pub async fn list_saves(
     } else {
         stmt.query_map([], map_row)
     }
-        .map_err(|e| AppError::DatabaseError(e.to_string()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+    .map_err(|e| AppError::DatabaseError(e.to_string()))?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
     tracing::debug!(count = saves.len(), "Listed saves");
     Ok(Json(saves))
@@ -123,7 +129,8 @@ pub async fn upload_save(
         ));
     }
 
-    while let Some(field) = multipart
+    // Process only the first file field
+    if let Some(field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::FileError(e.to_string()))?
@@ -207,14 +214,14 @@ pub async fn upload_save(
             Some(&format!("大小: {} bytes", save.file_size)),
         );
 
-        return Ok(Json(json!({
+        Ok(Json(json!({
             "success": true,
             "message": "Save uploaded successfully",
             "save": save
-        })));
+        })))
+    } else {
+        Err(AppError::BadRequest("No save file uploaded".to_string()))
     }
-
-    Err(AppError::BadRequest("No save file uploaded".to_string()))
 }
 
 pub async fn import_save(
@@ -244,7 +251,8 @@ pub async fn import_save(
 
     if !is_allowed_save_name(&save_name) {
         return Err(AppError::BadRequest(
-            "归档包只能下载，不能直接导入为世界存档。请解压后选择其中的 .wld 文件导入。".to_string(),
+            "归档包只能下载，不能直接导入为世界存档。请解压后选择其中的 .wld 文件导入。"
+                .to_string(),
         ));
     }
 
@@ -437,18 +445,17 @@ pub async fn backup_server(
 
         drop(db);
 
-        crate::services::auto_backup::sync_backup_to_oss(
-            &state.config.backup.oss,
-            &backup.file_path,
-            &backup.name,
-        );
-        if state.config.backup.local_retention_days > 0 {
-            crate::services::auto_backup::prune_backups_older_than(
-                &state.db,
-                &server_id,
-                state.config.backup.local_retention_days,
-            );
-        }
+        let global_policy =
+            load_global_backup_policy(&state.config.server.data_dir, &state.config.backup)
+                .map_err(AppError::FileError)?;
+        let server_override =
+            load_server_backup_override(&state.config.server.data_dir, &server_id)
+                .map_err(AppError::FileError)?;
+        let effective_policy =
+            resolve_effective_backup_policy(&global_policy, server_override.as_ref());
+
+        sync_backup_to_oss(&effective_policy.oss, &backup.file_path, &backup.name);
+        apply_backup_retention(&state.db, &server_id, &effective_policy);
 
         tracing::info!(server_id = %server_id, world_name = %world_name, "Server backed up successfully");
         crate::db::log_operation(

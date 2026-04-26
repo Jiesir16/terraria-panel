@@ -240,6 +240,74 @@
         </n-form-item>
 
         </div>
+        <!-- 自动备份策略 -->
+        <n-divider title-placement="left">
+          自动备份策略
+        </n-divider>
+        <div class="form-section">
+
+        <n-form-item label="策略来源">
+          <div>
+            <n-checkbox v-model:checked="useBackupOverride">启用本服覆盖</n-checkbox>
+            <div class="field-hint">
+              未启用时继承全局默认：
+              {{ backupDefaults?.enabled ? '自动备份已启用' : '自动备份已禁用' }}，
+              {{ backupDefaults?.interval_minutes ?? 60 }} 分钟/次，
+              保留 {{ backupDefaults?.max_backups_per_server ?? 0 }} 份，
+              {{ backupDefaults?.local_retention_days ?? 30 }} 天，
+              SSC {{ backupDefaults?.backup_ssc ? '开启' : '关闭' }}
+            </div>
+          </div>
+        </n-form-item>
+
+        <template v-if="useBackupOverride">
+          <n-form-item label="自动备份开关">
+            <n-checkbox v-model:checked="backupOverride.enabled">启用本服自动备份</n-checkbox>
+          </n-form-item>
+
+          <n-form-item label="备份间隔">
+            <n-input-number v-model:value="backupOverride.interval_minutes" :min="1" :max="10080" style="width: 100%;" />
+          </n-form-item>
+
+          <n-form-item label="保留份数">
+            <n-input-number v-model:value="backupOverride.max_backups_per_server" :min="0" :max="10000" style="width: 100%;" />
+          </n-form-item>
+
+          <n-form-item label="保留天数">
+            <n-input-number v-model:value="backupOverride.local_retention_days" :min="0" :max="3650" style="width: 100%;" />
+          </n-form-item>
+
+          <n-form-item label="SSC 自动备份">
+            <n-checkbox v-model:checked="backupOverride.backup_ssc">同时备份 tshock.sqlite</n-checkbox>
+          </n-form-item>
+        </template>
+        </div>
+
+        <!-- FRP -->
+        <n-divider title-placement="left">
+          FRP / 内网穿透
+        </n-divider>
+        <div class="form-section">
+          <n-form-item label="FRP 开关">
+            <div>
+              <n-checkbox v-model:checked="frpConfig.enabled">启用此服务器的 FRP</n-checkbox>
+              <div class="field-hint">此服务器只会映射游戏端口，不会暴露 REST 或其他端口。</div>
+            </div>
+          </n-form-item>
+          <n-form-item label="远端端口">
+            <n-input-number v-model:value="frpConfig.remote_port" :min="1" :max="65535" style="width: 100%;" />
+          </n-form-item>
+          <n-form-item label="Proxy 名称">
+            <n-input v-model:value="frpConfig.proxy_name" placeholder="留空则自动按服务器 ID 生成" />
+          </n-form-item>
+          <n-form-item label="本地端口说明">
+            <div class="field-hint">本地端口固定使用该服务器的游戏端口（当前配置端口：{{ formData.port || 7777 }}）。</div>
+          </n-form-item>
+          <n-form-item label="全局 FRP 状态">
+            <div class="field-hint">{{ frpDefaults?.enabled ? `已启用，frps=${frpDefaults.server_addr}:${frpDefaults.server_port}` : '全局 FRP 未启用' }}</div>
+          </n-form-item>
+        </div>
+
         <!-- REST API -->
         <n-divider title-placement="left">
           REST API
@@ -282,7 +350,8 @@ import { computed, ref, onMounted } from 'vue'
 import { NSpin, NForm, NFormItem, NInput, NInputNumber, NSelect, NCheckbox, NButton, NDivider, NSpace } from 'naive-ui'
 import { useAuthStore } from '../../stores/auth'
 import { useServersStore } from '../../stores/servers'
-import { serverApi } from '../../api/server'
+import { serverApi, type BackupPolicyOverride, type ServerFrpConfig } from '../../api/server'
+import { systemApi, type BackupSettings, type FrpSettings } from '../../api/system'
 import { useNotification } from '../../composables/useNotification'
 import SscConfigModal from './SscConfigModal.vue'
 
@@ -299,6 +368,21 @@ const formRef = ref()
 const loading = ref(false)
 const saving = ref(false)
 const showSscConfig = ref(false)
+const backupDefaults = ref<BackupSettings | null>(null)
+const frpDefaults = ref<FrpSettings | null>(null)
+const useBackupOverride = ref(false)
+const backupOverride = ref<BackupPolicyOverride>({
+  enabled: true,
+  interval_minutes: 60,
+  max_backups_per_server: 0,
+  local_retention_days: 30,
+  backup_ssc: true,
+})
+const frpConfig = ref<ServerFrpConfig>({
+  enabled: false,
+  remote_port: undefined,
+  proxy_name: ''
+})
 
 const formData = ref({
   // 基本设置
@@ -462,6 +546,20 @@ function handleWorldSizeChange(val: number) {
   }
 }
 
+async function loadBackupDefaults() {
+  try {
+    const [backupResponse, frpResponse] = await Promise.all([
+      systemApi.getBackupSettings(),
+      systemApi.getFrpSettings()
+    ])
+    backupDefaults.value = backupResponse.data
+    frpDefaults.value = frpResponse.data
+  } catch {
+    backupDefaults.value = null
+    frpDefaults.value = null
+  }
+}
+
 async function loadConfig() {
   loading.value = true
   try {
@@ -503,6 +601,19 @@ async function loadConfig() {
       rest_api_enabled: config.rest_api_enabled || false,
       rest_api_port: config.rest_api_port || 7878,
     }
+    useBackupOverride.value = !!config.backup_policy_override
+    backupOverride.value = {
+      enabled: config.backup_policy_override?.enabled ?? backupDefaults.value?.enabled ?? true,
+      interval_minutes: config.backup_policy_override?.interval_minutes ?? backupDefaults.value?.interval_minutes ?? 60,
+      max_backups_per_server: config.backup_policy_override?.max_backups_per_server ?? backupDefaults.value?.max_backups_per_server ?? 0,
+      local_retention_days: config.backup_policy_override?.local_retention_days ?? backupDefaults.value?.local_retention_days ?? 30,
+      backup_ssc: config.backup_policy_override?.backup_ssc ?? backupDefaults.value?.backup_ssc ?? true,
+    }
+    frpConfig.value = {
+      enabled: config.frp?.enabled ?? false,
+      remote_port: config.frp?.remote_port,
+      proxy_name: config.frp?.proxy_name || ''
+    }
     worldSize.value = detectWorldSize(formData.value.world_width, formData.value.world_height)
     if (formData.value.world_name) {
       selectedWorldFile.value = formData.value.world_name
@@ -517,7 +628,11 @@ async function loadConfig() {
 async function handleSave() {
   saving.value = true
   try {
-    await serversStore.updateConfig(props.serverId, formData.value as any)
+    await serversStore.updateConfig(props.serverId, {
+      ...formData.value,
+      backup_policy_override: useBackupOverride.value ? backupOverride.value : null,
+      frp: frpConfig.value,
+    } as any)
     await serversStore.updateServer(props.serverId, {
       world_name: formData.value.world_name || undefined,
       port: formData.value.port ?? undefined,
@@ -541,8 +656,9 @@ function handleSscConfigSaved(config: { Settings: { Enabled: boolean } }) {
   formData.value.server_side_character = config.Settings.Enabled
 }
 
-onMounted(() => {
-  loadConfig()
+onMounted(async () => {
+  await loadBackupDefaults()
+  await loadConfig()
   loadWorldFiles()
 })
 </script>

@@ -319,17 +319,67 @@
             <n-button size="small" type="primary" @click="applySelectedBuff" :disabled="!quickCmdPlayer || !selectedBuffId || quickCmdLoading">
               施加 Buff
             </n-button>
-            <n-button size="small" type="success" @click="applyBuffPack" :disabled="!quickCmdPlayer || quickCmdLoading">
-              一键常用 Buff
+            <n-button size="small" type="warning" @click="clearSelectedBuff" :disabled="!quickCmdPlayer || !selectedBuffId || quickCmdLoading">
+              清除指定 Buff
             </n-button>
-            <n-button size="small" type="success" secondary @click="applyAllPositiveBuffs" :disabled="!quickCmdPlayer || quickCmdLoading">
-              一键全部正向 Buff
+            <n-button size="small" type="success" @click="applyConfiguredBuffs" :disabled="!quickCmdPlayer || configuredBuffNumericIds.length === 0 || quickCmdLoading">
+              一键配置 Buff
             </n-button>
-            <n-button size="small" type="warning" @click="clearKnownBuffs" :disabled="!quickCmdPlayer || quickCmdLoading">
-              清除 Buff
+            <n-button size="small" type="warning" @click="clearConfiguredBuffs" :disabled="!quickCmdPlayer || configuredBuffNumericIds.length === 0 || quickCmdLoading">
+              清除配置 Buff
             </n-button>
           </div>
-          <p class="hint-text">Buff ID 来源：Terraria 官方 Wiki Buff IDs。下拉内置常用项，也可以直接输入 Wiki 上的任意 Buff ID。</p>
+          <div class="buff-config">
+            <div class="buff-config-header">
+              <span>一键 Buff 配置</span>
+              <div class="buff-config-actions">
+                <span class="buff-count">已选 {{ configuredBuffNumericIds.length }} 个</span>
+                <n-button size="tiny" quaternary @click="resetConfiguredBuffs">
+                  恢复常用
+                </n-button>
+              </div>
+            </div>
+            <n-select
+              v-model:value="configuredBuffIds"
+              :options="positiveBuffOptions"
+              multiple
+              filterable
+              tag
+              clearable
+              placeholder="选择要一键施加的正向 Buff，或输入自定义 ID"
+            />
+          </div>
+          <div class="buff-config">
+            <div class="buff-config-header">
+              <span>已激活 Buff</span>
+              <div class="buff-config-actions">
+                <span class="buff-count">已读 {{ activeBuffNumericIds.length }} 个</span>
+                <n-button size="tiny" quaternary :loading="activeBuffLoading" :disabled="!quickCmdPlayer" @click="loadActiveBuffs">
+                  读取
+                </n-button>
+              </div>
+            </div>
+            <n-select
+              v-model:value="selectedActiveBuffIds"
+              :options="activeBuffOptions"
+              multiple
+              filterable
+              clearable
+              placeholder="读取目标玩家当前激活 Buff 后选择要清除的项"
+            />
+            <div class="buff-config-actions">
+              <n-button size="small" type="warning" @click="clearSelectedActiveBuffs" :disabled="!quickCmdPlayer || activeBuffSelectedNumericIds.length === 0 || quickCmdLoading">
+                清除已选激活
+              </n-button>
+              <n-button size="small" type="warning" @click="clearAllLoadedActiveBuffs" :disabled="!quickCmdPlayer || activeBuffNumericIds.length === 0 || quickCmdLoading">
+                清除全部已读
+              </n-button>
+              <n-button size="small" type="error" @click="clearCurrentActiveBuffs" :disabled="!quickCmdPlayer || quickCmdLoading || activeBuffLoading">
+                读取并清除激活 Buff
+              </n-button>
+            </div>
+          </div>
+          <p class="hint-text">Buff ID 来源：Terraria 官方 Wiki Buff IDs。下拉包含官方 Buff 名称，也可以直接输入自定义 ID。</p>
         </div>
 
         <div class="quick-cmd-group">
@@ -426,16 +476,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, h, onMounted, reactive, computed } from 'vue'
+import { ref, h, onMounted, reactive, computed, watch } from 'vue'
 import {
   NButton, NSpin, NDataTable, NTag, NAlert, NCard,
   NInput, NModal, NForm, NFormItem, NSelect, NInputNumber, useDialog
 } from 'naive-ui'
-import type { DataTableColumns } from 'naive-ui'
+import type { DataTableColumns, SelectOption } from 'naive-ui'
 import { tshockRestApi } from '../../api/tshockRest'
 import type { TerrariaItem, TShockRestPlayer, TShockServerStatus, TShockWorldInfo } from '../../api/tshockRest'
 import { useNotification } from '../../composables/useNotification'
 import { useServersStore } from '../../stores/servers'
+import {
+  DEFAULT_ONE_CLICK_BUFF_IDS,
+  POSITIVE_TERRARIA_BUFF_OPTIONS,
+  TERRARIA_BUFF_OPTIONS,
+  findTerrariaBuff,
+  terrariaBuffDisplayName,
+} from '../../constants/terrariaBuffs'
 
 const props = defineProps<{
   serverId: string
@@ -507,6 +564,9 @@ const quickCmdLoading = ref(false)
 const quickCmdResult = ref('')
 const selectedBuffId = ref<number | string | null>(5)
 const customBuffDuration = ref(3600)
+const activeBuffLoading = ref(false)
+const activeBuffOptions = ref<SelectOption[]>([])
+const selectedActiveBuffIds = ref<BuffSelectValue[]>([])
 
 // Action loading states
 const actionLoading = reactive({
@@ -561,97 +621,18 @@ const playerOptions = computed(() => players.value
   .map((player: any) => ({ label: player.nickname, value: player.nickname }))
 )
 
-const TERRARIA_BUFFS = [
-  { id: 1, name: 'Obsidian Skin', zh: '黑曜石皮', type: 'Buff' },
-  { id: 2, name: 'Regeneration', zh: '再生', type: 'Buff' },
-  { id: 3, name: 'Swiftness', zh: '迅捷', type: 'Buff' },
-  { id: 4, name: 'Gills', zh: '鱼鳃', type: 'Buff' },
-  { id: 5, name: 'Ironskin', zh: '铁皮', type: 'Buff' },
-  { id: 6, name: 'Mana Regeneration', zh: '魔力再生', type: 'Buff' },
-  { id: 7, name: 'Magic Power', zh: '魔能', type: 'Buff' },
-  { id: 8, name: 'Featherfall', zh: '羽落', type: 'Buff' },
-  { id: 9, name: 'Spelunker', zh: '洞穴探险', type: 'Buff' },
-  { id: 10, name: 'Invisibility', zh: '隐身', type: 'Buff' },
-  { id: 11, name: 'Shine', zh: '光芒', type: 'Buff' },
-  { id: 12, name: 'Night Owl', zh: '夜猫子', type: 'Buff' },
-  { id: 13, name: 'Battle', zh: '战斗', type: 'Buff' },
-  { id: 14, name: 'Thorns', zh: '荆棘', type: 'Buff' },
-  { id: 15, name: 'Water Walking', zh: '水上漂', type: 'Buff' },
-  { id: 16, name: 'Archery', zh: '箭术', type: 'Buff' },
-  { id: 17, name: 'Hunter', zh: '狩猎', type: 'Buff' },
-  { id: 18, name: 'Gravitation', zh: '重力', type: 'Buff' },
-  { id: 26, name: 'Well Fed', zh: '酒足饭饱', type: 'Buff' },
-  { id: 29, name: 'Clairvoyance', zh: '灵视', type: 'Buff' },
-  { id: 48, name: 'Honey', zh: '蜂蜜', type: 'Buff' },
-  { id: 87, name: 'Cozy Fire', zh: '舒适篝火', type: 'Buff' },
-  { id: 89, name: 'Heart Lamp', zh: '心灯', type: 'Buff' },
-  { id: 93, name: 'Ammo Box', zh: '弹药箱', type: 'Buff' },
-  { id: 104, name: 'Mining', zh: '挖矿', type: 'Buff' },
-  { id: 105, name: 'Heartreach', zh: '拾心', type: 'Buff' },
-  { id: 106, name: 'Calm', zh: '镇静', type: 'Buff' },
-  { id: 107, name: 'Builder', zh: '建筑工', type: 'Buff' },
-  { id: 108, name: 'Titan', zh: '泰坦', type: 'Buff' },
-  { id: 109, name: 'Flipper', zh: '脚蹼', type: 'Buff' },
-  { id: 110, name: 'Summoning', zh: '召唤', type: 'Buff' },
-  { id: 111, name: 'Dangersense', zh: '危险感知', type: 'Buff' },
-  { id: 112, name: 'Ammo Reservation', zh: '弹药储备', type: 'Buff' },
-  { id: 113, name: 'Lifeforce', zh: '生命力', type: 'Buff' },
-  { id: 114, name: 'Endurance', zh: '耐力', type: 'Buff' },
-  { id: 115, name: 'Rage', zh: '暴怒', type: 'Buff' },
-  { id: 116, name: 'Inferno', zh: '狱火', type: 'Buff' },
-  { id: 117, name: 'Wrath', zh: '怒气', type: 'Buff' },
-  { id: 121, name: 'Fishing', zh: '钓鱼', type: 'Buff' },
-  { id: 122, name: 'Sonar', zh: '声呐', type: 'Buff' },
-  { id: 123, name: 'Crate', zh: '宝匣', type: 'Buff' },
-  { id: 124, name: 'Warmth', zh: '温暖', type: 'Buff' },
-  { id: 150, name: 'Bewitched', zh: '着魔', type: 'Buff' },
-  { id: 257, name: 'Lucky', zh: '幸运', type: 'Buff' },
-  { id: 336, name: 'Hearty Meal', zh: '丰盛大餐', type: 'Buff' },
-  { id: 20, name: 'Poisoned', zh: '中毒', type: 'Debuff' },
-  { id: 24, name: 'On Fire!', zh: '着火', type: 'Debuff' },
-  { id: 31, name: 'Confused', zh: '困惑', type: 'Debuff' },
-  { id: 39, name: 'Cursed Inferno', zh: '咒火', type: 'Debuff' },
-  { id: 44, name: 'Frostburn', zh: '霜冻', type: 'Debuff' },
-  { id: 69, name: 'Ichor', zh: '灵液', type: 'Debuff' },
-  { id: 70, name: 'Acid Venom', zh: '酸性毒液', type: 'Debuff' },
-  { id: 88, name: 'Chaos State', zh: '混沌状态', type: 'Debuff' },
-  { id: 323, name: 'Hellfire', zh: '地狱火', type: 'Debuff' },
-  { id: 324, name: 'Frostbite', zh: '冻伤', type: 'Debuff' },
-]
+type BuffSelectValue = number | string
 
-const buffOptions = TERRARIA_BUFFS.map((buff) => ({
-  label: `#${buff.id} ${buff.zh} / ${buff.name} (${buff.type})`,
-  value: buff.id,
-}))
-
-const positiveBuffIds = computed(() => TERRARIA_BUFFS
-  .filter(item => item.type === 'Buff' && item.id !== 114)
-  .map(item => item.id)
-)
-
-const ONE_CLICK_BUFF_IDS = [
-  2,   // Regeneration
-  3,   // Swiftness
-  5,   // Ironskin
-  6,   // Mana Regeneration
-  7,   // Magic Power
-  8,   // Featherfall
-  9,   // Spelunker
-  11,  // Shine
-  12,  // Night Owl
-  16,  // Archery
-  17,  // Hunter
-  104, // Mining
-  105, // Heartreach
-  107, // Builder
-  108, // Titan
-  110, // Summoning
-  111, // Dangersense
-  112, // Ammo Reservation
-  113, // Lifeforce
-  115, // Rage
-  117, // Wrath
-]
+const excludedOneClickBuffIds = new Set<number>([114])
+const buffOptions = TERRARIA_BUFF_OPTIONS
+const positiveBuffOptions = POSITIVE_TERRARIA_BUFF_OPTIONS.filter(option => !excludedOneClickBuffIds.has(Number(option.value)))
+const configuredBuffIds = ref<BuffSelectValue[]>([])
+const configuredBuffNumericIds = computed(() => normalizeOneClickBuffIds(configuredBuffIds.value))
+const activeBuffNumericIds = computed(() => normalizeBuffIds(activeBuffOptions.value
+  .map(option => option.value)
+  .filter((value): value is BuffSelectValue => typeof value === 'number' || typeof value === 'string')
+))
+const activeBuffSelectedNumericIds = computed(() => normalizeBuffIds(selectedActiveBuffIds.value))
 
 function itemDisplayName(item: TerrariaItem) {
   return item.zh_name ? `${item.zh_name} / ${item.name}` : item.name
@@ -689,6 +670,213 @@ function notificationText(text: string) {
 
 function quoteCommandArg(value: string) {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+}
+
+function buffStorageKey() {
+  return `terraria-panel:configured-buffs:${props.serverId}`
+}
+
+function parseBuffId(value: BuffSelectValue): number | null {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isInteger(numeric) || numeric <= 0) return null
+  return numeric
+}
+
+function normalizeBuffIds(values: BuffSelectValue[]) {
+  const seen = new Set<number>()
+  const result: number[] = []
+  for (const value of values) {
+    const id = parseBuffId(value)
+    if (id === null || seen.has(id)) continue
+    seen.add(id)
+    result.push(id)
+  }
+  return result
+}
+
+function normalizeOneClickBuffIds(values: BuffSelectValue[]) {
+  return normalizeBuffIds(values).filter(id => !excludedOneClickBuffIds.has(id))
+}
+
+function loadConfiguredBuffs() {
+  if (typeof window === 'undefined') {
+    configuredBuffIds.value = [...DEFAULT_ONE_CLICK_BUFF_IDS]
+    return
+  }
+
+  const raw = window.localStorage.getItem(buffStorageKey())
+  if (!raw) {
+    configuredBuffIds.value = [...DEFAULT_ONE_CLICK_BUFF_IDS]
+    return
+  }
+
+  try {
+    const parsed = JSON.parse(raw)
+    configuredBuffIds.value = Array.isArray(parsed)
+      ? normalizeOneClickBuffIds(parsed).map(id => id)
+      : [...DEFAULT_ONE_CLICK_BUFF_IDS]
+  } catch {
+    configuredBuffIds.value = [...DEFAULT_ONE_CLICK_BUFF_IDS]
+  }
+}
+
+function saveConfiguredBuffs() {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(buffStorageKey(), JSON.stringify(configuredBuffNumericIds.value))
+}
+
+function resetConfiguredBuffs() {
+  configuredBuffIds.value = [...DEFAULT_ONE_CLICK_BUFF_IDS]
+  notification.success('Buff 配置已恢复', `已选择 ${DEFAULT_ONE_CLICK_BUFF_IDS.length} 个常用 Buff`)
+}
+
+function firstStringValue(record: Record<string, any>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function firstNumericValue(record: Record<string, any>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key]
+    const numeric = typeof value === 'number' ? value : Number(value)
+    if (Number.isInteger(numeric) && numeric > 0) return numeric
+  }
+  return null
+}
+
+function buffIdFromText(text: string) {
+  const trimmed = text.trim()
+  if (/^\d+$/.test(trimmed)) return Number(trimmed)
+
+  const normalized = trimmed.toLowerCase()
+  const byName = TERRARIA_BUFF_OPTIONS
+    .map(option => findTerrariaBuff(Number(option.value)))
+    .find(buff => {
+      if (!buff) return false
+      const names = [buff.name, buff.internalName, buff.zh].filter(Boolean).map(name => String(name).toLowerCase())
+      return names.some(name => normalized === name || normalized.includes(name))
+    })
+  if (byName) return byName.id
+
+  const idMatch = trimmed.match(/(?:^|[#\s:,-])(?:id|buff|type)?\s*#?(\d+)(?:\D|$)/i)
+  return idMatch ? Number(idMatch[1]) : null
+}
+
+function parseActiveBuffEntry(entry: any) {
+  if (typeof entry === 'number') return entry > 0 ? entry : null
+  if (typeof entry === 'string') return buffIdFromText(entry)
+  if (!entry || typeof entry !== 'object') return null
+
+  const record = entry as Record<string, any>
+  const id = firstNumericValue(record, [
+    'id',
+    'ID',
+    'buffId',
+    'buffID',
+    'BuffId',
+    'BuffID',
+    'type',
+    'Type',
+    'buffType',
+    'BuffType',
+    'netId',
+    'netID',
+    'NetId',
+    'NetID',
+  ])
+  if (id) return id
+
+  const name = firstStringValue(record, [
+    'name',
+    'Name',
+    'buff',
+    'Buff',
+    'buffName',
+    'BuffName',
+    'displayName',
+    'DisplayName',
+    'internalName',
+    'InternalName',
+  ])
+  return name ? buffIdFromText(name) : null
+}
+
+function parseActiveBuffText(text: string) {
+  return text
+    .split(/[\n\r\t,;|]+/)
+    .map(part => buffIdFromText(part))
+    .filter((id): id is number => id !== null)
+}
+
+function collectBuffValues(value: any, found: any[] = []) {
+  if (!value || typeof value !== 'object') return found
+  if (Array.isArray(value)) {
+    return found
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    const lowerKey = key.toLowerCase()
+    if ((Array.isArray(child) || typeof child === 'string') && lowerKey.includes('buff')) {
+      found.push(child)
+    } else if (child && typeof child === 'object') {
+      collectBuffValues(child, found)
+    }
+  }
+  return found
+}
+
+function parseActiveBuffValue(value: any) {
+  if (Array.isArray(value)) {
+    return value
+      .map(entry => parseActiveBuffEntry(entry))
+      .filter((id): id is number => id !== null)
+  }
+  if (typeof value === 'string') {
+    return parseActiveBuffText(value)
+  }
+  return []
+}
+
+function extractActiveBuffIds(data: any) {
+  const candidates = [
+    data?.buffs,
+    data?.Buffs,
+    data?.activeBuffs,
+    data?.ActiveBuffs,
+    data?.player?.buffs,
+    data?.player?.Buffs,
+    data?.response?.buffs,
+    data?.response?.Buffs,
+    data?.response?.player?.buffs,
+    data?.response?.Player?.Buffs,
+    ...collectBuffValues(data),
+  ]
+
+  const seen = new Set<number>()
+  const ids: number[] = []
+  for (const candidate of candidates) {
+    for (const id of parseActiveBuffValue(candidate)) {
+      if (id === null || seen.has(id)) continue
+      seen.add(id)
+      ids.push(id)
+    }
+  }
+  return ids
+}
+
+function activeBuffSelectOptions(buffIds: number[]): SelectOption[] {
+  return buffIds.map(buffId => {
+    const buff = findTerrariaBuff(buffId)
+    const label = buff ? terrariaBuffLabelWithId(buff) : `#${buffId} Buff ${buffId}`
+    return { label, value: buffId }
+  })
+}
+
+function terrariaBuffLabelWithId(buff: NonNullable<ReturnType<typeof findTerrariaBuff>>) {
+  return `#${buff.id} ${terrariaBuffDisplayName(buff)}`
 }
 
 const itemOptions = computed(() => items.value.map((item) => ({
@@ -1120,12 +1308,24 @@ function handleGiveItem() {
 
 function applySelectedBuff() {
   if (!quickCmdPlayer.value || !selectedBuffId.value) return
-  const buffId = Number(selectedBuffId.value)
-  if (!Number.isFinite(buffId) || buffId <= 0) {
+  const buffId = parseBuffId(selectedBuffId.value)
+  if (buffId === null) {
     notification.error('Buff ID 无效', '请选择列表中的 Buff，或输入一个正整数 ID')
     return
   }
   quickCmd(`/gbuff ${quoteCommandArg(quickCmdPlayer.value)} ${buffId} ${customBuffDuration.value}`)
+}
+
+async function clearSelectedBuff() {
+  const player = quickCmdPlayer.value.trim()
+  if (!player || !selectedBuffId.value) return
+  const buffId = parseBuffId(selectedBuffId.value)
+  if (buffId === null) {
+    notification.error('Buff ID 无效', '请选择列表中的 Buff，或输入一个正整数 ID')
+    return
+  }
+
+  await clearBuffIds(player, [buffId], '清除指定 Buff')
 }
 
 function toggleGodmode() {
@@ -1146,90 +1346,148 @@ function slapPlayerNoDamage() {
   quickCmd(`/slap ${quoteCommandArg(player)} 0`)
 }
 
-async function applyBuffPack() {
+async function applyConfiguredBuffs() {
   const player = quickCmdPlayer.value.trim()
   if (!player) return
+  const buffIds = configuredBuffNumericIds.value
+  if (buffIds.length === 0) {
+    notification.warning('未选择 Buff', '请先在一键 Buff 配置中选择至少一个 Buff')
+    return
+  }
 
-  await applyBuffIds(player, ONE_CLICK_BUFF_IDS, '一键常用 Buff')
+  await setBuffIdsDuration(
+    player,
+    buffIds,
+    customBuffDuration.value,
+    '一键配置 Buff',
+    '成功',
+    `已给 ${player} 施加 ${buffIds.length} 个 Buff`
+  )
 }
 
-async function applyAllPositiveBuffs() {
-  const player = quickCmdPlayer.value.trim()
-  if (!player) return
-
-  await applyBuffIds(player, positiveBuffIds.value, '一键全部正向 Buff')
-}
-
-async function applyBuffIds(player: string, buffIds: number[], actionName: string) {
+async function setBuffIdsDuration(
+  player: string,
+  buffIds: number[],
+  duration: number,
+  actionName: string,
+  successPrefix: string,
+  successMessage: string,
+) {
   quickCmdLoading.value = true
   const results: string[] = []
   let failed = 0
 
-  for (const buffId of buffIds) {
-    const buff = TERRARIA_BUFFS.find(item => item.id === buffId)
-    const label = buff ? `${buff.zh}/${buff.name}` : `Buff ${buffId}`
-    const cmd = `/gbuff ${quoteCommandArg(player)} ${buffId} ${customBuffDuration.value}`
-    try {
-      const resp = await tshockRestApi.serverRawcmd(props.serverId, cmd)
-      const data = resp.data as any
-      const message = restResponseText(data) || JSON.stringify(data, null, 2)
-      if (restBusinessFailed(data)) {
+  try {
+    for (const buffId of buffIds) {
+      const buff = findTerrariaBuff(buffId)
+      const label = buff ? terrariaBuffDisplayName(buff) : `Buff ${buffId}`
+      const cmd = `/gbuff ${quoteCommandArg(player)} ${buffId} ${duration}`
+      try {
+        const resp = await tshockRestApi.serverRawcmd(props.serverId, cmd)
+        const data = resp.data as any
+        const message = restResponseText(data) || JSON.stringify(data, null, 2)
+        if (restBusinessFailed(data)) {
+          failed += 1
+          results.push(`失败 #${buffId} ${label}: ${message}`)
+        } else {
+          results.push(`${successPrefix} #${buffId} ${label}: ${message || 'OK'}`)
+        }
+      } catch (e: any) {
         failed += 1
-        results.push(`失败 #${buffId} ${label}: ${message}`)
-      } else {
-        results.push(`成功 #${buffId} ${label}: ${message || 'OK'}`)
+        results.push(`失败 #${buffId} ${label}: ${e?.response?.data?.error || e?.message || '请求失败'}`)
       }
-    } catch (e: any) {
-      failed += 1
-      results.push(`失败 #${buffId} ${label}: ${e?.response?.data?.error || e?.message || '请求失败'}`)
     }
-  }
 
-  quickCmdResult.value = results.join('\n')
-  if (failed > 0) {
-    notification.error(`${actionName} 部分失败`, notificationText(`失败 ${failed}/${buffIds.length} 项，详见命令输出`))
-  } else {
-    notification.success(`${actionName} 已施加`, notificationText(`已给 ${player} 施加 ${buffIds.length} 个 Buff`))
+    quickCmdResult.value = results.join('\n')
+    if (failed > 0) {
+      notification.error(`${actionName} 部分失败`, notificationText(`失败 ${failed}/${buffIds.length} 项，详见命令输出`))
+    } else {
+      notification.success(`${actionName} 已发送`, notificationText(successMessage))
+    }
+  } finally {
+    quickCmdLoading.value = false
   }
-  quickCmdLoading.value = false
 }
 
-async function clearKnownBuffs() {
+async function clearBuffIds(player: string, buffIds: number[], actionName: string) {
+  await setBuffIdsDuration(
+    player,
+    buffIds,
+    1,
+    actionName,
+    '已设置 1 秒',
+    `已把 ${player} 的 ${buffIds.length} 个 Buff 设置为 1 秒`
+  )
+}
+
+async function clearConfiguredBuffs() {
   const player = quickCmdPlayer.value.trim()
   if (!player) return
+  const buffIds = configuredBuffNumericIds.value
+  if (buffIds.length === 0) {
+    notification.warning('未选择 Buff', '请先在一键 Buff 配置中选择至少一个 Buff')
+    return
+  }
 
-  quickCmdLoading.value = true
-  const results: string[] = []
-  let failed = 0
-  const buffIds = positiveBuffIds.value
+  await clearBuffIds(player, buffIds, '清除配置 Buff')
+}
 
-  for (const buffId of buffIds) {
-    const buff = TERRARIA_BUFFS.find(item => item.id === buffId)
-    const label = buff ? `${buff.zh}/${buff.name}` : `Buff ${buffId}`
-    const cmd = `/gbuff ${quoteCommandArg(player)} ${buffId} 1`
-    try {
-      const resp = await tshockRestApi.serverRawcmd(props.serverId, cmd)
-      const data = resp.data as any
-      const message = restResponseText(data) || JSON.stringify(data, null, 2)
-      if (restBusinessFailed(data)) {
-        failed += 1
-        results.push(`失败 #${buffId} ${label}: ${message}`)
-      } else {
-        results.push(`已设置 1 秒 #${buffId} ${label}: ${message || 'OK'}`)
-      }
-    } catch (e: any) {
-      failed += 1
-      results.push(`失败 #${buffId} ${label}: ${e?.response?.data?.error || e?.message || '请求失败'}`)
+async function loadActiveBuffs(): Promise<number[]> {
+  const player = quickCmdPlayer.value.trim()
+  if (!player) return []
+
+  activeBuffLoading.value = true
+  try {
+    const resp = await tshockRestApi.playerRead(props.serverId, player)
+    const buffIds = extractActiveBuffIds(resp.data)
+    activeBuffOptions.value = activeBuffSelectOptions(buffIds)
+    selectedActiveBuffIds.value = [...buffIds]
+    quickCmdResult.value = JSON.stringify(resp.data, null, 2)
+    if (buffIds.length === 0) {
+      notification.warning('未读到激活 Buff', 'TShock 没有返回可识别的 buffs 列表，或玩家当前没有 Buff')
+    } else {
+      notification.success('已读取激活 Buff', `${player} 当前 ${buffIds.length} 个`)
     }
+    return buffIds
+  } catch (e: any) {
+    notification.error('读取激活 Buff 失败', e?.response?.data?.error || e?.message || '')
+    return []
+  } finally {
+    activeBuffLoading.value = false
+  }
+}
+
+async function clearSelectedActiveBuffs() {
+  const player = quickCmdPlayer.value.trim()
+  if (!player) return
+  const buffIds = activeBuffSelectedNumericIds.value
+  if (buffIds.length === 0) {
+    notification.warning('未选择 Buff', '请先读取并选择玩家当前激活 Buff')
+    return
   }
 
-  quickCmdResult.value = results.join('\n')
-  if (failed > 0) {
-    notification.error('清除 Buff 部分失败', notificationText(`失败 ${failed}/${buffIds.length} 项，详见命令输出`))
-  } else {
-    notification.success('清除 Buff 已发送', notificationText(`已把 ${player} 的 ${buffIds.length} 个已知正面 Buff 设置为 1 秒`))
+  await clearBuffIds(player, buffIds, '清除已选激活 Buff')
+}
+
+async function clearAllLoadedActiveBuffs() {
+  const player = quickCmdPlayer.value.trim()
+  if (!player) return
+  const buffIds = activeBuffNumericIds.value
+  if (buffIds.length === 0) {
+    notification.warning('未读取 Buff', '请先读取玩家当前激活 Buff')
+    return
   }
-  quickCmdLoading.value = false
+
+  await clearBuffIds(player, buffIds, '清除全部已读 Buff')
+}
+
+async function clearCurrentActiveBuffs() {
+  const player = quickCmdPlayer.value.trim()
+  if (!player) return
+  const buffIds = await loadActiveBuffs()
+  if (buffIds.length === 0) return
+
+  await clearBuffIds(player, buffIds, '一键清除激活 Buff')
 }
 
 // ─── Ban actions ───
@@ -1413,7 +1671,14 @@ async function quickCmd(cmd: string) {
 
 // ─── Init ───
 
+watch(configuredBuffIds, saveConfiguredBuffs, { deep: true })
+watch(quickCmdPlayer, () => {
+  activeBuffOptions.value = []
+  selectedActiveBuffIds.value = []
+})
+
 onMounted(async () => {
+  loadConfiguredBuffs()
   await checkRestSetup()
   refreshAll()
 })
@@ -1527,6 +1792,32 @@ defineExpose({ refreshAll })
   gap: 8px;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.buff-config {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.buff-config-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.buff-config-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.buff-count {
+  color: var(--text-muted, #808080);
+  font-size: 12px;
 }
 
 .item-form {

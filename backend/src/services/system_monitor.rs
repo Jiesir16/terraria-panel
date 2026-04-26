@@ -29,7 +29,7 @@ impl SystemMonitor {
     pub fn new() -> Self {
         let mut system = System::new_all();
         system.refresh_all();
-        
+
         let dotnet_version = std::process::Command::new("dotnet")
             .arg("--info")
             .output()
@@ -58,7 +58,7 @@ impl SystemMonitor {
                 }
             });
 
-        Self { 
+        Self {
             system,
             dotnet_version,
             mono_version,

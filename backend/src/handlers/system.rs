@@ -9,7 +9,17 @@ use serde_json::json;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::{auth::Auth, error::AppError, handlers::AppState, models::UserInfo};
+use crate::{
+    auth::Auth,
+    error::AppError,
+    handlers::AppState,
+    models::UserInfo,
+    services::{
+        backup_policy::{load_global_backup_policy, save_global_backup_policy, GlobalBackupPolicy},
+        frp_config::write_panel_frp_config,
+        frp_settings::{load_global_frp_settings, save_global_frp_settings, GlobalFrpSettings},
+    },
+};
 
 #[derive(Debug, Serialize)]
 pub struct OperationLog {
@@ -34,6 +44,151 @@ pub struct CreateUserRequest {
     pub username: String,
     pub password: String,
     pub role: String,
+}
+
+pub async fn get_backup_settings(
+    State(state): State<AppState>,
+    auth: Auth,
+) -> Result<Json<GlobalBackupPolicy>, AppError> {
+    if !auth.is_operator_or_admin() {
+        return Err(AppError::Forbidden(
+            "Only operators and admins can view backup settings".to_string(),
+        ));
+    }
+
+    let policy = load_global_backup_policy(&state.config.server.data_dir, &state.config.backup)
+        .map_err(AppError::FileError)?;
+    Ok(Json(policy))
+}
+
+pub async fn update_backup_settings(
+    State(state): State<AppState>,
+    auth: Auth,
+    Json(policy): Json<GlobalBackupPolicy>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !auth.is_admin() {
+        return Err(AppError::Forbidden(
+            "Only administrators can update backup settings".to_string(),
+        ));
+    }
+
+    save_global_backup_policy(&state.config.server.data_dir, &policy)
+        .map_err(AppError::FileError)?;
+    crate::db::log_operation(
+        &state.db,
+        &auth.user_id,
+        "更新备份默认策略",
+        Some("backup"),
+        None,
+    );
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "Backup settings updated successfully"
+    })))
+}
+
+pub async fn get_frp_settings(
+    State(state): State<AppState>,
+    auth: Auth,
+) -> Result<Json<GlobalFrpSettings>, AppError> {
+    if !auth.is_operator_or_admin() {
+        return Err(AppError::Forbidden(
+            "Only operators and admins can view FRP settings".to_string(),
+        ));
+    }
+
+    let settings =
+        load_global_frp_settings(&state.config.server.data_dir, state.config.server.port)
+            .map_err(AppError::FileError)?;
+    Ok(Json(settings))
+}
+
+pub async fn update_frp_settings(
+    State(state): State<AppState>,
+    auth: Auth,
+    Json(settings): Json<GlobalFrpSettings>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !auth.is_admin() {
+        return Err(AppError::Forbidden(
+            "Only administrators can update FRP settings".to_string(),
+        ));
+    }
+
+    save_global_frp_settings(&state.config.server.data_dir, &settings)
+        .map_err(AppError::FileError)?;
+
+    if settings.enabled && settings.panel_tunnel.enabled {
+        let config_path = write_panel_frp_config(&state.config.server.data_dir, &settings)
+            .map_err(AppError::FileError)?;
+        state
+            .frp_manager
+            .restart_tunnel(
+                "panel",
+                &settings.frpc_bin,
+                config_path.to_string_lossy().as_ref(),
+                Some(settings.panel_tunnel.remote_port),
+            )
+            .await?;
+    } else {
+        let _ = state.frp_manager.stop_tunnel("panel").await;
+    }
+
+    crate::db::log_operation(&state.db, &auth.user_id, "更新 FRP 设置", Some("frp"), None);
+    Ok(Json(json!({
+        "success": true,
+        "message": "FRP settings updated successfully"
+    })))
+}
+
+pub async fn get_panel_frp_status(
+    State(state): State<AppState>,
+    auth: Auth,
+) -> Result<Json<crate::services::frp_manager::FrpRuntimeStatus>, AppError> {
+    if !auth.is_operator_or_admin() {
+        return Err(AppError::Forbidden(
+            "Only operators and admins can view FRP status".to_string(),
+        ));
+    }
+
+    Ok(Json(state.frp_manager.status("panel").await))
+}
+
+pub async fn restart_panel_frp(
+    State(state): State<AppState>,
+    auth: Auth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !auth.is_admin() {
+        return Err(AppError::Forbidden(
+            "Only administrators can restart panel FRP".to_string(),
+        ));
+    }
+
+    let settings =
+        load_global_frp_settings(&state.config.server.data_dir, state.config.server.port)
+            .map_err(AppError::FileError)?;
+    if !settings.enabled || !settings.panel_tunnel.enabled {
+        return Err(AppError::BadRequest(
+            "Panel FRP tunnel is not enabled".to_string(),
+        ));
+    }
+
+    let config_path = write_panel_frp_config(&state.config.server.data_dir, &settings)
+        .map_err(AppError::FileError)?;
+    state
+        .frp_manager
+        .restart_tunnel(
+            "panel",
+            &settings.frpc_bin,
+            config_path.to_string_lossy().as_ref(),
+            Some(settings.panel_tunnel.remote_port),
+        )
+        .await?;
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "Panel FRP restarted"
+    })))
 }
 
 pub async fn system_info(

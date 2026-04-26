@@ -13,6 +13,11 @@ export interface Server {
   created_by: string
   created_at: string
   updated_at: string
+  frp?: {
+    running: boolean
+    remote_port?: number | null
+    last_error?: string | null
+  }
 }
 
 // Backend get_server returns nested { server, player_count, uptime_seconds }
@@ -60,9 +65,30 @@ export interface ServerRuntimeStatus {
   running: boolean
   process_running: boolean
   db_status?: string
+  frp?: {
+    running: boolean
+    remote_port?: number | null
+    last_error?: string | null
+  }
+}
+
+export interface BackupPolicyOverride {
+  enabled?: boolean
+  interval_minutes?: number
+  max_backups_per_server?: number
+  local_retention_days?: number
+  backup_ssc?: boolean
+}
+
+export interface ServerFrpConfig {
+  enabled?: boolean
+  remote_port?: number
+  proxy_name?: string
 }
 
 export interface ServerConfig {
+  backup_policy_override?: BackupPolicyOverride | null
+  frp?: ServerFrpConfig | null
   [key: string]: any
 }
 
@@ -173,6 +199,8 @@ export interface TerrariaItemListResponse {
   items: TerrariaItem[]
 }
 
+export type DeleteServerBackupMode = 'keep' | 'delete'
+
 export const serverApi = {
   getList: () =>
     api.get<ServerStatus[]>('/servers'),
@@ -186,8 +214,10 @@ export const serverApi = {
   update: (id: string, data: UpdateServerRequest) =>
     api.put<ServerStatus>(`/servers/${id}`, data),
 
-  delete: (id: string) =>
-    api.delete(`/servers/${id}`),
+  delete: (id: string, backupMode: DeleteServerBackupMode = 'keep') =>
+    api.delete(`/servers/${id}`, {
+      params: { backup_mode: backupMode }
+    }),
 
   start: (id: string) =>
     api.post(`/servers/${id}/start`),
@@ -206,6 +236,12 @@ export const serverApi = {
 
   getStatus: (id: string) =>
     api.get<ServerRuntimeStatus>(`/servers/${id}/status`),
+
+  getFrpStatus: (id: string) =>
+    api.get(`/servers/${id}/frp/status`),
+
+  restartFrp: (id: string) =>
+    api.post(`/servers/${id}/frp/restart`),
 
   getRecentLogs: (id: string, limit = 200) =>
     api.get<string[]>(`/servers/${id}/logs`, {

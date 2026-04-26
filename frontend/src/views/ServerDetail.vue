@@ -3,7 +3,12 @@
     <div class="detail-header">
       <div>
         <h1>{{ currentServer?.name }}</h1>
-        <server-status-badge :status="currentServer?.status || 'stopped'" />
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <server-status-badge :status="currentServer?.status || 'stopped'" />
+          <n-button v-if="authStore.isOperator" size="tiny" secondary @click="handleRestartFrp" :loading="frpRestartLoading">
+            {{ currentServer?.frp?.running ? '重连 FRP' : '启动 FRP' }}
+          </n-button>
+        </div>
       </div>
       <div class="header-actions">
         <n-button @click="handleRefresh">
@@ -31,6 +36,9 @@
         <n-button v-if="authStore.isOperator" @click="handleRestart" type="warning" :loading="restartLoading">
           重启服务器
         </n-button>
+        <n-button v-if="authStore.isAdmin" type="error" @click="handleDeleteServer">
+          删除服务器
+        </n-button>
       </div>
     </div>
 
@@ -50,6 +58,38 @@
 
         <n-tab-pane v-if="authStore.isOperator" name="rest" tab="实时管理">
           <TShockRestPanel :key="serverId" :server-id="serverId" ref="tshockRestRef" />
+        </n-tab-pane>
+
+        <n-tab-pane v-if="authStore.isOperator" name="commands" tab="命令库">
+          <TShockCommandLibrary :key="serverId" :server-id="serverId" />
+        </n-tab-pane>
+
+        <n-tab-pane v-if="authStore.isOperator" name="frp" tab="FRP">
+          <div class="mods-section">
+            <div class="section-header">
+              <h3>FRP 运行状态</h3>
+              <n-button text type="primary" @click="handleRefresh">刷新</n-button>
+            </div>
+            <div class="info-list">
+              <div class="info-item">
+                <span class="label">运行状态</span>
+                <span class="value">{{ currentServer?.frp?.running ? '运行中' : '未运行' }}</span>
+              </div>
+              <div class="info-item">
+                <span class="label">远端端口</span>
+                <span class="value">{{ currentServer?.frp?.remote_port ?? '-' }}</span>
+              </div>
+              <div class="info-item">
+                <span class="label">最近错误</span>
+                <span class="value">{{ currentServer?.frp?.last_error || '-' }}</span>
+              </div>
+            </div>
+            <div style="margin-top: 16px;">
+              <n-button v-if="authStore.isOperator" @click="handleRestartFrp" :loading="frpRestartLoading">
+                重连 FRP
+              </n-button>
+            </div>
+          </div>
         </n-tab-pane>
 
         <n-tab-pane name="mods" tab="Mod管理">
@@ -147,11 +187,13 @@ import { useAuthStore } from '../stores/auth'
 import { useServersStore } from '../stores/servers'
 import { modsApi } from '../api/mods'
 import { savesApi } from '../api/saves'
+import { serverApi } from '../api/server'
 import { useNotification } from '../composables/useNotification'
 import ServerConsole from '../components/server/ServerConsole.vue'
 import ServerConfigForm from '../components/server/ServerConfigForm.vue'
 import ServerStatusBadge from '../components/server/ServerStatusBadge.vue'
 import TShockManager from '../components/server/TShockManager.vue'
+import TShockCommandLibrary from '../components/server/TShockCommandLibrary.vue'
 import TShockRestPanel from '../components/server/TShockRestPanel.vue'
 import ModCard from '../components/mod/ModCard.vue'
 import ModUploadModal from '../components/mod/ModUploadModal.vue'
@@ -174,6 +216,7 @@ const mods = ref<any[]>([])
 const saves = ref<any[]>([])
 const tshockManagerRef = ref<InstanceType<typeof TShockManager> | null>(null)
 const tshockRestRef = ref<InstanceType<typeof TShockRestPanel> | null>(null)
+const frpRestartLoading = ref(false)
 let statusPollTimer: ReturnType<typeof setInterval> | null = null
 const serverMissingHandled = ref(false)
 
@@ -478,6 +521,57 @@ async function handleDeleteSave(saveId: string) {
   } catch (error: any) {
     notification.error('删除失败', error?.response?.data?.message || '')
   }
+}
+
+async function handleRestartFrp() {
+  frpRestartLoading.value = true
+  try {
+    await serverApi.restartFrp(serverId.value)
+    notification.success('FRP 已重连', '')
+    await loadServer()
+  } catch (error: any) {
+    notification.error('FRP 重连失败', error?.response?.data?.message || '')
+  } finally {
+    frpRestartLoading.value = false
+  }
+}
+
+function handleDeleteServer() {
+  const serverName = currentServer.value?.name || serverId.value
+
+  const runDelete = async (backupMode: 'keep' | 'delete') => {
+    try {
+      const result = await serversStore.deleteServer(serverId.value, backupMode)
+      notification.success(
+        backupMode === 'delete' ? '服务器和相关备份已删除' : '服务器已删除，备份已保留',
+        result?.deleted_backup_count ? `已删除 ${result.deleted_backup_count} 个备份文件` : ''
+      )
+      router.replace('/servers')
+    } catch (error: any) {
+      notification.error('删除失败', error?.response?.data?.message || error?.response?.data?.error || '')
+    }
+  }
+
+  dialog.warning({
+    title: '删除服务器并保留备份',
+    content: `确定要删除服务器「${serverName}」吗？服务器配置和运行数据会被移除，但现有备份会保留，后续仍可在存档管理中单独删除。`,
+    positiveText: '删除服务器，保留备份',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      await runDelete('keep')
+    },
+    onNegativeClick: () => {
+      dialog.error({
+        title: '删除服务器和相关备份',
+        content: `要把服务器「${serverName}」的相关备份也一起删除吗？这会同时删除该服务器生成的备份记录和磁盘文件，且不可恢复。`,
+        positiveText: '删除服务器和备份',
+        negativeText: '返回',
+        onPositiveClick: async () => {
+          await runDelete('delete')
+        }
+      })
+    }
+  })
 }
 
 async function handleBackup() {

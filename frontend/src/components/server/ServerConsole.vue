@@ -196,7 +196,7 @@ function scrollToBottom() {
 function sendCommand(command: string) {
   commandInput.value = command
   // For commands that typically need arguments, just fill the input
-  const needsArg = ['/kick', '/ban', '/mute', '/tp', '/tphere', '/broadcast', '/give', '/gbuff', '/spawnmob', '/grow']
+  const needsArg = ['/kick', '/ban', '/mute', '/broadcast', '/give', '/gbuff']
   if (needsArg.some(c => command === c)) {
     // Focus the input so user can add arguments
     nextTick(() => {

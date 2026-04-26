@@ -3,7 +3,9 @@ use crate::models::ServerStatus;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
@@ -18,9 +20,14 @@ pub struct ServerProcess {
     pub status: ServerStatus,
 }
 
+type ExitCallback = Arc<
+    dyn Fn(String) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> + Send + Sync + 'static,
+>;
+
 #[derive(Clone)]
 pub struct ProcessManager {
     processes: Arc<RwLock<HashMap<String, ServerProcess>>>,
+    exit_callback: Arc<RwLock<Option<ExitCallback>>>,
 }
 
 const MAX_LOG_HISTORY_LINES: usize = 2000;
@@ -29,7 +36,18 @@ impl ProcessManager {
     pub fn new() -> Self {
         Self {
             processes: Arc::new(RwLock::new(HashMap::new())),
+            exit_callback: Arc::new(RwLock::new(None)),
         }
+    }
+
+    pub async fn set_exit_callback<F, Fut>(&self, callback: F)
+    where
+        F: Fn(String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let callback: ExitCallback = Arc::new(move |server_id| Box::pin(callback(server_id)));
+        let mut exit_callback = self.exit_callback.write().await;
+        *exit_callback = Some(callback);
     }
 
     pub async fn start_server(
@@ -286,9 +304,11 @@ impl ProcessManager {
         let mut processes = self.processes.write().await;
         processes.insert(server_id.to_string(), process);
         tracing::info!(server_id = %server_id, "Server process registered");
+        drop(processes);
 
         // Now spawn the real exit watcher that owns the child
         let processes_ref = Arc::clone(&self.processes);
+        let exit_callback = Arc::clone(&self.exit_callback);
         let server_id_exit2 = server_id.to_string();
         tokio::spawn(async move {
             let status = child.wait().await;
@@ -309,15 +329,23 @@ impl ProcessManager {
                 }
             }
 
-            // Remove from processes map
-            {
+            let removed = {
                 let mut processes = processes_ref.write().await;
-                processes.remove(&server_id_exit2);
+                let removed = processes.remove(&server_id_exit2).is_some();
                 tracing::info!(server_id = %server_id_exit2, "Process entry removed after exit");
+                removed
+            };
+
+            if removed {
+                let callback = {
+                    let exit_callback = exit_callback.read().await;
+                    exit_callback.clone()
+                };
+                if let Some(callback) = callback {
+                    callback(server_id_exit2.clone()).await;
+                }
             }
         });
-
-        drop(processes); // release write lock
 
         Ok(())
     }

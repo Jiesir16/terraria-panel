@@ -1,5 +1,21 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BackupPolicyOverride {
+    pub enabled: Option<bool>,
+    pub interval_minutes: Option<u64>,
+    pub max_backups_per_server: Option<usize>,
+    pub local_retention_days: Option<u64>,
+    pub backup_ssc: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ServerFrpConfig {
+    pub enabled: Option<bool>,
+    pub remote_port: Option<u16>,
+    pub proxy_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     // === 基本设置 ===
@@ -50,6 +66,14 @@ pub struct ServerConfig {
     // === 消息设定 ===
     pub motd: Option<String>,                          // 进服欢迎消息
     pub server_full_no_reserve_reason: Option<String>, // 服务器满员消息
+
+    // === 备份策略 ===
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_policy_override: Option<BackupPolicyOverride>,
+
+    // === FRP ===
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frp: Option<ServerFrpConfig>,
 }
 
 impl ServerConfig {
@@ -232,6 +256,8 @@ impl ServerConfig {
             rest_api_port: get_u16(settings, "RestApiPort"),
             motd: get_string(settings, "Motd"),
             server_full_no_reserve_reason: get_string(settings, "ServerFullNoReserveReason"),
+            backup_policy_override: None,
+            frp: None,
         }
     }
 
@@ -324,6 +350,8 @@ impl Default for ServerConfig {
             rest_api_port: Some(7878),
             motd: None,
             server_full_no_reserve_reason: None,
+            backup_policy_override: None,
+            frp: None,
         }
     }
 }

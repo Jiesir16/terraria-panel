@@ -11,9 +11,7 @@ use crate::{
     auth::Auth,
     error::AppError,
     handlers::AppState,
-    models::{
-        TShockGroupDetail, TShockSscCharacter, TShockSscCharacterSummary,
-    },
+    models::{TShockGroupDetail, TShockSscCharacter, TShockSscCharacterSummary},
     services::tshock_rest::TShockRestClient,
 };
 
@@ -150,7 +148,10 @@ fn push_csv_tokens(target: &mut Vec<String>, text: &str) {
 fn find_value_case_insensitive<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {
     let obj = value.as_object()?;
     for (key, child) in obj {
-        if keys.iter().any(|expected| key.eq_ignore_ascii_case(expected)) {
+        if keys
+            .iter()
+            .any(|expected| key.eq_ignore_ascii_case(expected))
+        {
             return Some(child);
         }
     }
@@ -339,7 +340,9 @@ pub async fn get_group(
                     .ok()
                     .and_then(|conn| {
                         conn.prepare("SELECT COUNT(*) FROM Users WHERE Usergroup = ?1")
-                            .and_then(|mut s| s.query_row(params![&group_name], |row| row.get::<_, i64>(0)))
+                            .and_then(|mut s| {
+                                s.query_row(params![&group_name], |row| row.get::<_, i64>(0))
+                            })
                             .ok()
                     })
                     .unwrap_or(0);
@@ -369,9 +372,7 @@ pub async fn get_group(
     // Get parent from Groups table
     let parent: Option<String> = conn
         .prepare("SELECT Parent FROM Groups WHERE GroupName = ?1")
-        .and_then(|mut s| {
-            s.query_row(params![&group_name], |row| row.get::<_, Option<String>>(0))
-        })
+        .and_then(|mut s| s.query_row(params![&group_name], |row| row.get::<_, Option<String>>(0)))
         .unwrap_or(None);
 
     // Get permissions. Newer schemas use a permissions table; older schemas keep CSV in Groups.Commands.
@@ -383,7 +384,8 @@ pub async fn get_group(
         let mut stmt = conn
             .prepare(&query)
             .map_err(|e| AppError::DatabaseError(e.to_string()))?;
-        let rows = stmt.query_map(params![&group_name], |row| row.get::<_, String>(0))
+        let rows = stmt
+            .query_map(params![&group_name], |row| row.get::<_, String>(0))
             .map_err(|e| AppError::DatabaseError(e.to_string()))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AppError::DatabaseError(e.to_string()))?;
@@ -435,10 +437,7 @@ pub async fn create_group(
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("Missing 'name' field".to_string()))?;
 
-    let parent = body
-        .get("parent")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let parent = body.get("parent").and_then(|v| v.as_str()).unwrap_or("");
 
     let conn = open_tshock_db(&state, &server_id)?;
 
@@ -526,7 +525,10 @@ pub async fn delete_group(
 
     // Delete group
     let affected = conn
-        .execute("DELETE FROM Groups WHERE GroupName = ?1", params![&group_name])
+        .execute(
+            "DELETE FROM Groups WHERE GroupName = ?1",
+            params![&group_name],
+        )
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
     if affected == 0 {
@@ -837,9 +839,10 @@ pub async fn export_ssc_character(
             })
         })
         .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => {
-                AppError::NotFound(format!("SSC character with account {} not found", account_id))
-            }
+            rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!(
+                "SSC character with account {} not found",
+                account_id
+            )),
             _ => AppError::DatabaseError(e.to_string()),
         })?;
 
@@ -956,7 +959,10 @@ pub async fn delete_ssc_character(
 
     let conn = open_tshock_db(&state, &server_id)?;
     let affected = conn
-        .execute("DELETE FROM tsCharacter WHERE Account = ?1", params![account_id])
+        .execute(
+            "DELETE FROM tsCharacter WHERE Account = ?1",
+            params![account_id],
+        )
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
     if affected == 0 {
@@ -1038,7 +1044,10 @@ pub async fn backup_ssc_characters(
     // Also grab user mapping
     let id_column = users_account_id_column(&conn);
     let mut user_stmt = conn
-        .prepare(&format!("SELECT {}, Username, Usergroup FROM Users", id_column))
+        .prepare(&format!(
+            "SELECT {}, Username, Usergroup FROM Users",
+            id_column
+        ))
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
     let users: Vec<serde_json::Value> = user_stmt
         .query_map([], |row| {
@@ -1060,7 +1069,12 @@ pub async fn backup_ssc_characters(
     });
 
     // Write to saves directory
-    let backup_dir = state.config.server.data_dir.join("saves").join("ssc-backups");
+    let backup_dir = state
+        .config
+        .server
+        .data_dir
+        .join("saves")
+        .join("ssc-backups");
     std::fs::create_dir_all(&backup_dir)
         .map_err(|e| AppError::FileError(format!("Failed to create backup directory: {}", e)))?;
 

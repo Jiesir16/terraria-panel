@@ -46,6 +46,54 @@ export interface UpdateUserRequest {
   role?: 'admin' | 'operator' | 'viewer'
 }
 
+export interface BackupSettings {
+  enabled: boolean
+  interval_minutes: number
+  max_backups_per_server: number
+  local_retention_days: number
+  backup_ssc: boolean
+  archive_daily_enabled: boolean
+  archive_hour: number
+  archive_after_days: number
+  oss: {
+    enabled: boolean
+    provider: string
+    endpoint: string
+    bucket: string
+    region: string
+    access_key_id: string
+    access_key_secret: string
+    local_path: string
+    prefix: string
+  }
+}
+
+export interface FrpSettings {
+  enabled: boolean
+  frpc_bin: string
+  server_addr: string
+  server_port: number
+  auth_token: string
+  transport_protocol: string
+  tls_enable: boolean
+  log_level: string
+  panel_tunnel: {
+    enabled: boolean
+    local_port: number
+    remote_port: number
+    proxy_name: string
+  }
+}
+
+export interface FrpStatus {
+  key: string
+  running: boolean
+  pid?: number | null
+  config_path?: string | null
+  remote_port?: number | null
+  last_error?: string | null
+}
+
 export const systemApi = {
   getSystemInfo: () =>
     api.get<SystemInfo>('/system/info'),
@@ -54,6 +102,24 @@ export const systemApi = {
     api.get<OperationLog[]>('/system/logs', {
       params: { limit, offset }
     }),
+
+  getBackupSettings: () =>
+    api.get<BackupSettings>('/settings/backup'),
+
+  updateBackupSettings: (data: BackupSettings) =>
+    api.put('/settings/backup', data),
+
+  getFrpSettings: () =>
+    api.get<FrpSettings>('/settings/frp'),
+
+  updateFrpSettings: (data: FrpSettings) =>
+    api.put('/settings/frp', data),
+
+  getPanelFrpStatus: () =>
+    api.get<FrpStatus>('/settings/frp/panel/status'),
+
+  restartPanelFrp: () =>
+    api.post('/settings/frp/panel/restart'),
 
   getUsers: () =>
     api.get<UserInfo[]>('/users'),

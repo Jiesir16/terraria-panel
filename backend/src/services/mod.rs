@@ -1,14 +1,20 @@
 pub mod auto_backup;
+pub mod backup_policy;
 pub mod command_policy;
+pub mod frp_config;
+pub mod frp_manager;
+pub mod frp_settings;
 pub mod item_catalog;
 pub mod mod_manager;
 pub mod process_manager;
 pub mod save_manager;
 pub mod system_monitor;
+pub mod telegram_bot;
 pub mod tshock_rest;
 pub mod version_manager;
 
 pub use command_policy::can_execute_command;
+pub use frp_manager::FrpManager;
 pub use mod_manager::ModManager;
 pub use process_manager::ProcessManager;
 pub use save_manager::SaveManager;

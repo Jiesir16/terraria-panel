@@ -12,6 +12,6 @@ pub use server::{
     TShockGroupDetail, TShockGroupSummary, TShockSecurityOverview, TShockSscCharacter,
     TShockSscCharacterSummary, TShockUserAccount,
 };
-pub use server_config::{get_templates, ServerConfig, ServerConfigTemplate};
+pub use server_config::{get_templates, BackupPolicyOverride, ServerConfig, ServerConfigTemplate};
 pub use ssc_config::SscConfig;
 pub use user::{ChangePasswordRequest, LoginRequest, LoginResponse, RegisterRequest, UserInfo};

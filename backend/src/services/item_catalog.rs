@@ -24,16 +24,26 @@ pub struct ItemCatalog {
 fn cache_path(data_dir: &Path, version: &str) -> std::path::PathBuf {
     let safe_version = version
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>();
-    data_dir.join("items").join(format!("{}.json", safe_version))
+    data_dir
+        .join("items")
+        .join(format!("{}.json", safe_version))
 }
 
 fn parse_cargo_items(value: Value) -> Result<Vec<TerrariaItem>, AppError> {
     let rows = value
         .get("cargoquery")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| AppError::BadRequest("Invalid Terraria item catalog response".to_string()))?;
+        .ok_or_else(|| {
+            AppError::BadRequest("Invalid Terraria item catalog response".to_string())
+        })?;
 
     let mut items = Vec::new();
     for row in rows {
@@ -44,7 +54,12 @@ fn parse_cargo_items(value: Value) -> Result<Vec<TerrariaItem>, AppError> {
             .get("itemid")
             .and_then(|v| v.as_str())
             .and_then(|v| v.parse::<i32>().ok())
-            .or_else(|| title.get("itemid").and_then(|v| v.as_i64()).map(|v| v as i32))
+            .or_else(|| {
+                title
+                    .get("itemid")
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v as i32)
+            })
         else {
             continue;
         };
@@ -74,7 +89,10 @@ fn parse_cargo_items(value: Value) -> Result<Vec<TerrariaItem>, AppError> {
     Ok(items)
 }
 
-async fn fetch_cargo_chunk(endpoint: &str, where_clause: &str) -> Result<Vec<TerrariaItem>, AppError> {
+async fn fetch_cargo_chunk(
+    endpoint: &str,
+    where_clause: &str,
+) -> Result<Vec<TerrariaItem>, AppError> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
@@ -102,7 +120,9 @@ async fn fetch_cargo_chunk(endpoint: &str, where_clause: &str) -> Result<Vec<Ter
             .header("User-Agent", "terraria-panel")
             .send()
             .await
-            .map_err(|e| AppError::ProcessError(format!("Failed to download Terraria item IDs: {}", e)))?;
+            .map_err(|e| {
+                AppError::ProcessError(format!("Failed to download Terraria item IDs: {}", e))
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -113,10 +133,9 @@ async fn fetch_cargo_chunk(endpoint: &str, where_clause: &str) -> Result<Vec<Ter
             )));
         }
 
-        let value: Value = response
-            .json()
-            .await
-            .map_err(|e| AppError::ProcessError(format!("Failed to parse Terraria item catalog: {}", e)))?;
+        let value: Value = response.json().await.map_err(|e| {
+            AppError::ProcessError(format!("Failed to parse Terraria item catalog: {}", e))
+        })?;
         let chunk = parse_cargo_items(value)?;
         let chunk_len = chunk.len();
         items.extend(chunk);
@@ -191,10 +210,14 @@ fn extract_table_cells(row: &str) -> Vec<String> {
     let mut offset = 0;
     while let Some(start) = row[offset..].find("<td") {
         let cell_start = offset + start;
-        let Some(content_start) = row[cell_start..].find('>').map(|pos| cell_start + pos + 1) else {
+        let Some(content_start) = row[cell_start..].find('>').map(|pos| cell_start + pos + 1)
+        else {
             break;
         };
-        let Some(end) = row[content_start..].find("</td>").map(|pos| content_start + pos) else {
+        let Some(end) = row[content_start..]
+            .find("</td>")
+            .map(|pos| content_start + pos)
+        else {
             break;
         };
         cells.push(strip_html(&row[content_start..end]));
@@ -212,7 +235,10 @@ fn parse_zh_item_id_page(html: &str) -> HashMap<i32, String> {
         let Some(content_start) = html[row_start..].find('>').map(|pos| row_start + pos + 1) else {
             break;
         };
-        let Some(row_end) = html[content_start..].find("</tr>").map(|pos| content_start + pos) else {
+        let Some(row_end) = html[content_start..]
+            .find("</tr>")
+            .map(|pos| content_start + pos)
+        else {
             break;
         };
 
@@ -221,7 +247,10 @@ fn parse_zh_item_id_page(html: &str) -> HashMap<i32, String> {
             if let Ok(id) = cells[0].trim().parse::<i32>() {
                 let zh_name = cells[1].trim();
                 let internal_name = cells[2].trim();
-                if !zh_name.is_empty() && !internal_name.is_empty() && !zh_name.contains("无官方名称") {
+                if !zh_name.is_empty()
+                    && !internal_name.is_empty()
+                    && !zh_name.contains("无官方名称")
+                {
                     names.insert(id, zh_name.to_string());
                 }
             }
@@ -244,7 +273,12 @@ async fn fetch_chinese_item_names() -> Result<HashMap<i32, String>, AppError> {
         .header("User-Agent", "terraria-panel")
         .send()
         .await
-        .map_err(|e| AppError::ProcessError(format!("Failed to download Chinese Terraria item IDs: {}", e)))?;
+        .map_err(|e| {
+            AppError::ProcessError(format!(
+                "Failed to download Chinese Terraria item IDs: {}",
+                e
+            ))
+        })?;
 
     if !response.status().is_success() {
         return Err(AppError::ProcessError(format!(
@@ -253,10 +287,9 @@ async fn fetch_chinese_item_names() -> Result<HashMap<i32, String>, AppError> {
         )));
     }
 
-    let html = response
-        .text()
-        .await
-        .map_err(|e| AppError::ProcessError(format!("Failed to read Chinese Terraria item IDs: {}", e)))?;
+    let html = response.text().await.map_err(|e| {
+        AppError::ProcessError(format!("Failed to read Chinese Terraria item IDs: {}", e))
+    })?;
     let names = parse_zh_item_id_page(&html);
     if names.is_empty() {
         return Err(AppError::ProcessError(

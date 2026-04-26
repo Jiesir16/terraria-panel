@@ -20,6 +20,7 @@ pub struct AppState {
     pub mod_manager: std::sync::Arc<crate::services::ModManager>,
     pub save_manager: std::sync::Arc<crate::services::SaveManager>,
     pub system_monitor: std::sync::Arc<tokio::sync::Mutex<crate::services::SystemMonitor>>,
+    pub frp_manager: std::sync::Arc<crate::services::FrpManager>,
 }
 
 pub async fn login(

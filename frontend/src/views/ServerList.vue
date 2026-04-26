@@ -214,19 +214,39 @@ function handleKill(serverId: string) {
 }
 
 function handleDelete(serverId: string) {
-  dialog.error({
-    title: '确认删除',
-    content: `确定要删除服务器「${getServerName(serverId)}」吗？此操作不可撤销，服务器的所有配置和数据将被移除。`,
-    positiveText: '确认删除',
+  const serverName = getServerName(serverId)
+
+  const runDelete = async (backupMode: 'keep' | 'delete') => {
+    try {
+      const result = await serversStore.deleteServer(serverId, backupMode)
+      notification.success(
+        backupMode === 'delete' ? '服务器和相关备份已删除' : '服务器已删除，备份已保留',
+        result?.deleted_backup_count ? `已删除 ${result.deleted_backup_count} 个备份文件` : ''
+      )
+      await loadServers()
+    } catch (error: any) {
+      notification.error('删除失败', error?.response?.data?.message || error?.response?.data?.error || '')
+    }
+  }
+
+  dialog.warning({
+    title: '删除服务器并保留备份',
+    content: `确定要删除服务器「${serverName}」吗？服务器配置和运行数据会被移除，但现有备份会保留，后续仍可在存档管理中单独删除。`,
+    positiveText: '删除服务器，保留备份',
     negativeText: '取消',
     onPositiveClick: async () => {
-      try {
-        await serversStore.deleteServer(serverId)
-        notification.success('服务器已删除', '')
-        await loadServers()
-      } catch (error: any) {
-        notification.error('删除失败', error?.response?.data?.message || '')
-      }
+      await runDelete('keep')
+    },
+    onNegativeClick: () => {
+      dialog.error({
+        title: '删除服务器和相关备份',
+        content: `要把服务器「${serverName}」的相关备份也一起删除吗？这会同时删除该服务器生成的备份记录和磁盘文件，且不可恢复。`,
+        positiveText: '删除服务器和备份',
+        negativeText: '返回',
+        onPositiveClick: async () => {
+          await runDelete('delete')
+        }
+      })
     }
   })
 }

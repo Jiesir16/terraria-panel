@@ -13,6 +13,7 @@ use axum::{
     Extension, Router,
 };
 use std::sync::Arc;
+use tokio::signal;
 use tower_http::cors::CorsLayer;
 
 use handlers::AppState;
@@ -70,6 +71,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.server.data_dir.join("servers"),
     ));
     let system_monitor = Arc::new(tokio::sync::Mutex::new(services::SystemMonitor::new()));
+    let frp_manager = Arc::new(services::FrpManager::new());
+
+    let process_manager = process_manager.clone();
 
     // Create application state
     let state = AppState {
@@ -81,14 +85,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mod_manager,
         save_manager,
         system_monitor,
+        frp_manager: frp_manager.clone(),
     };
+
+    state
+        .process_manager
+        .set_exit_callback({
+            let frp_manager = state.frp_manager.clone();
+            move |server_id| {
+                let frp_manager = frp_manager.clone();
+                async move {
+                    let _ = frp_manager
+                        .stop_tunnel(&format!("server:{}", server_id))
+                        .await;
+                }
+            }
+        })
+        .await;
 
     // Start auto-backup background task
     services::auto_backup::spawn_auto_backup(
         config.clone(),
         db.clone(),
         state.save_manager.clone(),
+        state.process_manager.clone(),
     );
+
+    services::telegram_bot::spawn_telegram_bot(config.telegram.clone(), state.clone());
+
+    if let Ok(frp_settings) = services::frp_settings::load_global_frp_settings(
+        &config.server.data_dir,
+        config.server.port,
+    ) {
+        if frp_settings.enabled && frp_settings.panel_tunnel.enabled {
+            if let Ok(config_path) =
+                services::frp_config::write_panel_frp_config(&config.server.data_dir, &frp_settings)
+            {
+                let _ = frp_manager
+                    .start_tunnel(
+                        "panel",
+                        &frp_settings.frpc_bin,
+                        config_path.to_string_lossy().as_ref(),
+                        Some(frp_settings.panel_tunnel.remote_port),
+                    )
+                    .await;
+            }
+        }
+    }
+
+    if let Err(error) = recover_server_frp_tunnels(&state).await {
+        tracing::warn!(error = %error, "Failed to recover server FRP tunnels");
+    }
 
     // Build router
     let app = Router::new()
@@ -126,6 +173,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/servers/:id/status",
             get(handlers::server::server_status),
+        )
+        .route(
+            "/api/servers/:id/frp/status",
+            get(handlers::server::frp_status),
+        )
+        .route(
+            "/api/servers/:id/frp/restart",
+            post(handlers::server::restart_frp),
         )
         .route(
             "/api/servers/:id/worlds",
@@ -210,8 +265,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route(
             "/api/servers/:id/tshock-groups/:name",
-            get(handlers::tshock::get_group)
-                .delete(handlers::tshock::delete_group),
+            get(handlers::tshock::get_group).delete(handlers::tshock::delete_group),
         )
         .route(
             "/api/servers/:id/tshock-groups/:name/permissions",
@@ -419,6 +473,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/system/info", get(handlers::system::system_info))
         .route("/api/system/logs", get(handlers::system::list_logs))
         .route(
+            "/api/settings/backup",
+            get(handlers::system::get_backup_settings)
+                .put(handlers::system::update_backup_settings),
+        )
+        .route(
+            "/api/settings/frp",
+            get(handlers::system::get_frp_settings).put(handlers::system::update_frp_settings),
+        )
+        .route(
+            "/api/settings/frp/panel/status",
+            get(handlers::system::get_panel_frp_status),
+        )
+        .route(
+            "/api/settings/frp/panel/restart",
+            post(handlers::system::restart_panel_frp),
+        )
+        .route(
             "/api/users",
             get(handlers::system::list_users).post(handlers::system::create_user),
         )
@@ -429,7 +500,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(Extension(token_manager))
         .layer(CorsLayer::permissive())
         .layer(DefaultBodyLimit::max(512 * 1024 * 1024)) // 512MB for save/mod uploads
-        .with_state(state);
+        .with_state(state.clone());
 
     // Bind and serve
     let listener =
@@ -442,7 +513,193 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.server.port
     );
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
+    state.frp_manager.stop_all().await;
+
+    Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        if let Ok(mut sigterm) = signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            sigterm.recv().await;
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+}
+
+async fn recover_server_frp_tunnels(state: &AppState) -> Result<(), Box<dyn std::error::Error>> {
+    use services::frp_config::write_server_frp_config;
+    use services::frp_settings::load_global_frp_settings;
+
+    tracing::info!("Recovering FRP tunnels for running servers...");
+
+    // Load global FRP settings
+    let frp_settings =
+        match load_global_frp_settings(&state.config.server.data_dir, state.config.server.port) {
+            Ok(settings) => settings,
+            Err(e) => {
+                tracing::warn!("Failed to load FRP settings: {}", e);
+                return Ok(());
+            }
+        };
+
+    if !frp_settings.enabled {
+        tracing::info!("Global FRP is disabled, skipping recovery");
+        return Ok(());
+    }
+
+    // Get all running servers from database
+    let servers: Vec<(String, u16)> = {
+        let db = state
+            .db
+            .lock()
+            .map_err(|e| format!("Failed to lock database: {}", e))?;
+        let mut stmt = db.prepare("SELECT id, port FROM servers WHERE status = 'running'")?;
+        let result: Vec<(String, u16)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(Result::ok)
+            .collect();
+        result
+    }; // db lock is dropped here
+
+    tracing::info!("Found {} running servers", servers.len());
+
+    for (server_id, db_port) in servers {
+        let panel_config_path = state
+            .config
+            .server
+            .data_dir
+            .join("servers")
+            .join(&server_id)
+            .join("tshock")
+            .join("panel-config.json");
+
+        let config: models::ServerConfig = if panel_config_path.exists() {
+            let config_str = match std::fs::read_to_string(&panel_config_path) {
+                Ok(content) => content,
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to read panel-config.json for server {}: {}",
+                        server_id,
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            match serde_json::from_str(&config_str) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("Failed to parse config for server {}: {}", server_id, e);
+                    continue;
+                }
+            }
+        } else {
+            continue;
+        };
+
+        // Check if FRP is enabled for this server
+        let frp_config = match &config.frp {
+            Some(frp) if frp.enabled.unwrap_or(false) => frp,
+            _ => continue,
+        };
+
+        let remote_port = match frp_config.remote_port {
+            Some(port) => port,
+            None => {
+                tracing::warn!("Server {} has FRP enabled but no remote_port", server_id);
+                continue;
+            }
+        };
+
+        let proxy_name = frp_config
+            .proxy_name
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| format!("terraria-{}", server_id));
+
+        let local_port = config.port.unwrap_or(db_port);
+
+        // Write FRP config
+        let config_path = match write_server_frp_config(
+            &state.config.server.data_dir,
+            &frp_settings,
+            &server_id,
+            &proxy_name,
+            local_port,
+            remote_port,
+        ) {
+            Ok(path) => path,
+            Err(e) => {
+                tracing::warn!("Failed to write FRP config for server {}: {}", server_id, e);
+                continue;
+            }
+        };
+
+        let key = format!("server:{}", server_id);
+        let config_path_str = config_path.to_string_lossy().to_string();
+
+        let process_running = state.process_manager.is_running(&server_id).await;
+        if !process_running {
+            if let Some(pid) = services::FrpManager::find_frpc_pid_by_config(&config_path_str).await
+            {
+                tracing::warn!(
+                    "Server {} is not running but FRP process {} is still alive, stopping orphan FRP",
+                    server_id,
+                    pid
+                );
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(pid as i32),
+                    nix::sys::signal::Signal::SIGTERM,
+                );
+            }
+            continue;
+        }
+
+        let recovered = match state
+            .frp_manager
+            .recover_from_config(&key, &config_path_str, Some(remote_port))
+            .await
+        {
+            Ok(value) => value,
+            Err(e) => {
+                tracing::warn!("Failed to recover FRP for server {}: {}", server_id, e);
+                continue;
+            }
+        };
+
+        if recovered {
+            let status = state.frp_manager.status(&key).await;
+            tracing::info!(
+                "Recovered FRP tunnel for server {} (PID: {:?}, remote_port: {})",
+                server_id,
+                status.pid,
+                remote_port
+            );
+        } else {
+            tracing::warn!(
+                "FRP tunnel for server {} is not running, will start on next server restart",
+                server_id
+            );
+        }
+    }
+
+    tracing::info!("FRP tunnel recovery completed");
     Ok(())
 }

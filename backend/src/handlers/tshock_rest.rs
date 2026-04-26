@@ -4,13 +4,13 @@
 //! token for the target server and forwards the request to TShock.
 
 use axum::{
-    extract::{Path, Query, State},
     Json,
+    extract::{Path, Query, State},
 };
 use chrono::Utc;
 use rusqlite::params;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::Write;
 
 use crate::{
@@ -30,9 +30,7 @@ fn client_for(state: &AppState, server_id: &str) -> Result<TShockRestClient, App
 
 fn require_operator(auth: &Auth) -> Result<(), AppError> {
     if !auth.is_operator_or_admin() {
-        return Err(AppError::Forbidden(
-            "需要管理员或操作员权限".to_string(),
-        ));
+        return Err(AppError::Forbidden("需要管理员或操作员权限".to_string()));
     }
     Ok(())
 }
@@ -115,7 +113,11 @@ fn log_rest_operation(state: &AppState, server_id: &str, operation: &str, messag
     });
 
     let path = logs_dir.join("rest-operations.log");
-    match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         Ok(mut file) => {
             if let Err(e) = writeln!(file, "{}", entry) {
                 tracing::error!(server_id = %server_id, path = %path.display(), error = %e, "Failed to write REST operation log");
@@ -155,16 +157,16 @@ macro_rules! proxy_rest_action {
 pub async fn rest_setup(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: Auth,
+    auth: Auth,
 ) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
     let result = tshock_rest::ensure_rest_setup(&state.config.server.data_dir, &id);
     match result {
-        Ok((ready, message, token)) => {
+        Ok((ready, message, _token)) => {
             log_rest_operation(&state, &id, "REST 自动配置", &message);
             Ok(Json(json!({
                 "ready": ready,
-                "message": message,
-                "token": token
+                "message": message
             })))
         }
         Err(error) => {
@@ -204,9 +206,10 @@ pub struct BroadcastBody {
 pub async fn rest_server_broadcast(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: Auth,
+    auth: Auth,
     Json(body): Json<BroadcastBody>,
 ) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
     let client = client_for(&state, &id)?;
     let operation = format!("REST 广播: {}", body.msg);
     proxy_rest_action!(state, id, &operation, client.server_broadcast(&body.msg))
@@ -215,8 +218,9 @@ pub async fn rest_server_broadcast(
 pub async fn rest_server_reload(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: Auth,
+    auth: Auth,
 ) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
     let client = client_for(&state, &id)?;
     proxy_rest_action!(state, id, "REST 重载配置", client.server_reload())
 }
@@ -239,9 +243,16 @@ pub struct RawCmdBody {
 pub async fn rest_server_rawcmd(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: Auth,
+    auth: Auth,
     Json(body): Json<RawCmdBody>,
 ) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
+    if crate::services::command_policy::requires_game_player_context(&body.cmd) {
+        return Err(AppError::BadRequest(
+            "该命令需要游戏内玩家上下文，不能从面板远程执行".to_string(),
+        ));
+    }
+
     let client = client_for(&state, &id)?;
     let operation = format!("REST 原始命令: {}", body.cmd);
     proxy_rest_action!(state, id, &operation, client.server_rawcmd(&body.cmd))
@@ -264,7 +275,8 @@ pub async fn rest_item_list(
     require_operator(&auth)?;
     let version = server_tshock_version(&state, &id)?;
     let catalog = item_catalog::ensure_catalog(&state.config.server.data_dir, &version).await?;
-    let items = item_catalog::filter_items(&catalog, query.q.as_deref(), query.limit.unwrap_or(10000));
+    let items =
+        item_catalog::filter_items(&catalog, query.q.as_deref(), query.limit.unwrap_or(10000));
     Ok(Json(json!({
         "version": catalog.version,
         "source": catalog.source,
@@ -363,16 +375,22 @@ pub struct ServerOffBody {
 pub async fn rest_server_off(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: Auth,
+    auth: Auth,
     Json(body): Json<ServerOffBody>,
 ) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
     let client = client_for(&state, &id)?;
     let operation = format!(
         "REST 停止服务器: nosave={}, message={}",
         body.nosave,
         body.message.as_deref().unwrap_or("")
     );
-    proxy_rest_action!(state, id, &operation, client.server_off(body.message.as_deref(), body.nosave))
+    proxy_rest_action!(
+        state,
+        id,
+        &operation,
+        client.server_off(body.message.as_deref(), body.nosave)
+    )
 }
 
 pub async fn rest_server_motd(
@@ -426,12 +444,18 @@ pub struct KickBody {
 pub async fn rest_player_kick(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: Auth,
+    auth: Auth,
     Json(body): Json<KickBody>,
 ) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
     let client = client_for(&state, &id)?;
     let operation = format!("REST 踢出玩家: {}", body.player);
-    proxy_rest_action!(state, id, &operation, client.player_kick(&body.player, body.reason.as_deref()))
+    proxy_rest_action!(
+        state,
+        id,
+        &operation,
+        client.player_kick(&body.player, body.reason.as_deref())
+    )
 }
 
 pub async fn rest_player_ban(
@@ -443,7 +467,9 @@ pub async fn rest_player_ban(
     require_operator(&auth)?;
     let client = client_for(&state, &id)?;
     let operation = format!("REST 封禁玩家: {}", body.player);
-    let result = client.player_ban(&body.player, body.reason.as_deref()).await;
+    let result = client
+        .player_ban(&body.player, body.reason.as_deref())
+        .await;
     match &result {
         Ok(data) => log_rest_success(&state, &id, &operation, data),
         Err(error) => log_rest_error(&state, &id, &operation, error),
@@ -467,9 +493,10 @@ pub struct PlayerNameBody {
 pub async fn rest_player_kill(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: Auth,
+    auth: Auth,
     Json(body): Json<PlayerNameBody>,
 ) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
     let client = client_for(&state, &id)?;
     let operation = format!("REST 击杀玩家: {}", body.player);
     proxy_rest_action!(state, id, &operation, client.player_kill(&body.player))
@@ -478,9 +505,10 @@ pub async fn rest_player_kill(
 pub async fn rest_player_mute(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: Auth,
+    auth: Auth,
     Json(body): Json<PlayerNameBody>,
 ) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
     let client = client_for(&state, &id)?;
     let operation = format!("REST 禁言玩家: {}", body.player);
     proxy_rest_action!(state, id, &operation, client.player_mute(&body.player))
@@ -489,9 +517,10 @@ pub async fn rest_player_mute(
 pub async fn rest_player_unmute(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: Auth,
+    auth: Auth,
     Json(body): Json<PlayerNameBody>,
 ) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
     let client = client_for(&state, &id)?;
     let operation = format!("REST 解除禁言: {}", body.player);
     proxy_rest_action!(state, id, &operation, client.player_unmute(&body.player))
@@ -545,7 +574,12 @@ pub async fn rest_user_create(
     require_admin(&auth)?;
     let client = client_for(&state, &id)?;
     let operation = format!("REST 创建用户: {}", body.user);
-    proxy_rest_action!(state, id, &operation, client.user_create(&body.user, &body.password, body.group.as_deref()))
+    proxy_rest_action!(
+        state,
+        id,
+        &operation,
+        client.user_create(&body.user, &body.password, body.group.as_deref())
+    )
 }
 
 #[derive(Deserialize)]
@@ -564,7 +598,12 @@ pub async fn rest_user_update(
     require_admin(&auth)?;
     let client = client_for(&state, &id)?;
     let operation = format!("REST 更新用户: {}", body.user);
-    proxy_rest_action!(state, id, &operation, client.user_update(&body.user, body.password.as_deref(), body.group.as_deref()))
+    proxy_rest_action!(
+        state,
+        id,
+        &operation,
+        client.user_update(&body.user, body.password.as_deref(), body.group.as_deref())
+    )
 }
 
 pub async fn rest_user_destroy(
@@ -616,7 +655,16 @@ pub async fn rest_group_create(
     require_admin(&auth)?;
     let client = client_for(&state, &id)?;
     let operation = format!("REST 创建用户组: {}", body.group);
-    proxy_rest_action!(state, id, &operation, client.group_create(&body.group, body.parent.as_deref(), body.permissions.as_deref()))
+    proxy_rest_action!(
+        state,
+        id,
+        &operation,
+        client.group_create(
+            &body.group,
+            body.parent.as_deref(),
+            body.permissions.as_deref()
+        )
+    )
 }
 
 #[derive(Deserialize)]
@@ -634,7 +682,12 @@ pub async fn rest_group_update(
     require_admin(&auth)?;
     let client = client_for(&state, &id)?;
     let operation = format!("REST 更新用户组: {}", name);
-    proxy_rest_action!(state, id, &operation, client.group_update(&name, body.parent.as_deref(), body.permissions.as_deref()))
+    proxy_rest_action!(
+        state,
+        id,
+        &operation,
+        client.group_update(&name, body.parent.as_deref(), body.permissions.as_deref())
+    )
 }
 
 pub async fn rest_group_destroy(
@@ -680,19 +733,30 @@ pub struct BanCreateBody {
 pub async fn rest_ban_create(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: Auth,
+    auth: Auth,
     Json(body): Json<BanCreateBody>,
 ) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
     let client = client_for(&state, &id)?;
     let operation = format!("REST 创建封禁: {}", body.identifier);
-    proxy_rest_action!(state, id, &operation, client.ban_create(&body.identifier, body.reason.as_deref(), body.duration.as_deref()))
+    proxy_rest_action!(
+        state,
+        id,
+        &operation,
+        client.ban_create(
+            &body.identifier,
+            body.reason.as_deref(),
+            body.duration.as_deref()
+        )
+    )
 }
 
 pub async fn rest_ban_destroy(
     State(state): State<AppState>,
     Path((id, ticket)): Path<(String, String)>,
-    _auth: Auth,
+    auth: Auth,
 ) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
     let client = client_for(&state, &id)?;
     let operation = format!("REST 删除封禁: {}", ticket);
     proxy_rest_action!(state, id, &operation, client.ban_destroy(&ticket))
@@ -713,8 +777,9 @@ pub async fn rest_world_read(
 pub async fn rest_world_save(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: Auth,
+    auth: Auth,
 ) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
     let client = client_for(&state, &id)?;
     proxy_rest_action!(state, id, "REST 保存世界", client.world_save())
 }
@@ -728,12 +793,18 @@ pub struct ButcherBody {
 pub async fn rest_world_butcher(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: Auth,
+    auth: Auth,
     Json(body): Json<ButcherBody>,
 ) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
     let client = client_for(&state, &id)?;
     let operation = format!("REST 清除NPC: kill_friendly={}", body.kill_friendly);
-    proxy_rest_action!(state, id, &operation, client.world_butcher(body.kill_friendly))
+    proxy_rest_action!(
+        state,
+        id,
+        &operation,
+        client.world_butcher(body.kill_friendly)
+    )
 }
 
 #[derive(Deserialize)]
@@ -744,9 +815,10 @@ pub struct BoolStateBody {
 pub async fn rest_world_bloodmoon(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: Auth,
+    auth: Auth,
     Json(body): Json<BoolStateBody>,
 ) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
     let client = client_for(&state, &id)?;
     let operation = format!("REST 血月状态: {}", body.state);
     proxy_rest_action!(state, id, &operation, client.world_bloodmoon(body.state))
@@ -755,8 +827,9 @@ pub async fn rest_world_bloodmoon(
 pub async fn rest_world_meteor(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: Auth,
+    auth: Auth,
 ) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
     let client = client_for(&state, &id)?;
     proxy_rest_action!(state, id, "REST 召唤陨石", client.world_meteor())
 }
@@ -764,9 +837,10 @@ pub async fn rest_world_meteor(
 pub async fn rest_world_autosave(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _auth: Auth,
+    auth: Auth,
     Json(body): Json<BoolStateBody>,
 ) -> Result<Json<Value>, AppError> {
+    require_operator(&auth)?;
     let client = client_for(&state, &id)?;
     let operation = format!("REST 自动保存状态: {}", body.state);
     proxy_rest_action!(state, id, &operation, client.world_autosave(body.state))

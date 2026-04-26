@@ -5,7 +5,12 @@
 
 use crate::config::{BackupConfig, Config, OssBackupConfig};
 use crate::db::DbPool;
-use crate::services::SaveManager;
+use crate::services::{
+    backup_policy::{
+        load_global_backup_policy, load_server_backup_override, EffectiveBackupPolicy,
+    },
+    ProcessManager, SaveManager,
+};
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use hmac::{Hmac, Mac};
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
@@ -42,32 +47,35 @@ pub fn spawn_auto_backup(
     config: Config,
     db: DbPool,
     save_manager: Arc<SaveManager>,
+    process_manager: Arc<ProcessManager>,
 ) {
-    if !config.backup.enabled {
-        tracing::info!("Auto-backup is disabled in config");
-        return;
-    }
-
-    let interval = Duration::from_secs(config.backup.interval_minutes * 60);
     let data_dir = config.server.data_dir.clone();
-    let backup_config = config.backup.clone();
+    let config_backup = config.backup.clone();
     let archive_db = db.clone();
     let archive_data_dir = data_dir.clone();
-    let archive_config = backup_config.clone();
+    let archive_config = config_backup.clone();
 
     tokio::spawn(async move {
         tracing::info!(
-            interval_min = config.backup.interval_minutes,
-            retention_days = config.backup.local_retention_days,
-            oss_enabled = config.backup.oss.enabled,
+            fallback_interval_min = config.backup.interval_minutes,
+            fallback_retention_days = config.backup.local_retention_days,
+            fallback_oss_enabled = config.backup.oss.enabled,
             "Auto-backup task started"
         );
 
         loop {
-            tokio::time::sleep(interval).await;
-            tracing::info!("Auto-backup: running scheduled backup");
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            tracing::debug!("Auto-backup: running scheduler tick");
 
-            if let Err(e) = run_backup_cycle(&db, &save_manager, &data_dir, &backup_config) {
+            if let Err(e) = run_backup_cycle(
+                &db,
+                &save_manager,
+                &process_manager,
+                &data_dir,
+                &config_backup,
+            )
+            .await
+            {
                 tracing::error!(error = %e, "Auto-backup cycle failed");
             }
         }
@@ -82,22 +90,21 @@ pub fn spawn_auto_backup(
             );
 
             loop {
-                tokio::time::sleep(duration_until_next_archive(
-                    archive_config.archive_hour,
-                ))
-                .await;
+                tokio::time::sleep(duration_until_next_archive(archive_config.archive_hour)).await;
 
-                let target_date =
-                    Local::now().date_naive()
-                        - chrono::Duration::days(archive_config.archive_after_days as i64);
+                let target_date = Local::now().date_naive()
+                    - chrono::Duration::days(archive_config.archive_after_days as i64);
                 tracing::info!(
                     target_date = %target_date,
                     "Daily backup archive: running scheduled archive"
                 );
 
-                if let Err(e) =
-                    archive_world_backups_for_date(&archive_db, &archive_data_dir, &archive_config, target_date)
-                {
+                if let Err(e) = archive_world_backups_for_date(
+                    &archive_db,
+                    &archive_data_dir,
+                    &archive_config,
+                    target_date,
+                ) {
                     tracing::error!(error = %e, "Daily backup archive failed");
                 }
             }
@@ -105,42 +112,67 @@ pub fn spawn_auto_backup(
     }
 }
 
-/// Run one backup cycle: iterate all running servers, backup world + SSC.
-fn run_backup_cycle(
+/// Run one scheduler tick and backup due running servers.
+pub async fn run_backup_cycle(
     db: &DbPool,
     save_manager: &Arc<SaveManager>,
+    process_manager: &Arc<ProcessManager>,
     data_dir: &Path,
-    backup_config: &BackupConfig,
+    fallback_backup_config: &BackupConfig,
 ) -> Result<(), String> {
-    let conn = db.lock().map_err(|e| format!("DB lock: {}", e))?;
+    let servers: Vec<(String, String, String)> = {
+        let conn = db.lock().map_err(|e| format!("DB lock: {}", e))?;
 
-    // Get all servers that have a world_name set (regardless of running status,
-    // we backup any server that has been configured with a world)
-    let mut stmt = conn
-        .prepare("SELECT id, name, world_name, status FROM servers WHERE world_name IS NOT NULL AND world_name != ''")
-        .map_err(|e| format!("Query servers: {}", e))?;
+        let mut stmt = conn
+            .prepare("SELECT id, name, world_name FROM servers WHERE world_name IS NOT NULL AND world_name != ''")
+            .map_err(|e| format!("Query servers: {}", e))?;
 
-    let servers: Vec<(String, String, String, String)> = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })
-        .map_err(|e| format!("Map servers: {}", e))?
-        .filter_map(|r| r.ok())
-        .collect();
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| format!("Map servers: {}", e))?;
 
-    drop(stmt);
-    drop(conn);
+        rows.filter_map(|r| r.ok()).collect()
+    };
 
-    for (server_id, server_name, world_name, _status) in &servers {
-        // 1) Backup world file
+    let global_policy = load_global_backup_policy(data_dir, fallback_backup_config)?;
+
+    for (server_id, server_name, world_name) in &servers {
+        if !process_manager.is_running(server_id).await {
+            tracing::debug!(
+                server = %server_name,
+                server_id = %server_id,
+                "Auto-backup: skipped stopped server"
+            );
+            continue;
+        }
+
+        let server_override = load_server_backup_override(data_dir, server_id)?;
+        let effective_policy = crate::services::backup_policy::resolve_effective_backup_policy(
+            &global_policy,
+            server_override.as_ref(),
+        );
+
+        if !effective_policy.enabled {
+            tracing::debug!(
+                server = %server_name,
+                server_id = %server_id,
+                "Auto-backup: skipped disabled server policy"
+            );
+            continue;
+        }
+
+        if !should_run_backup_now(db, server_id, effective_policy.interval_minutes)? {
+            continue;
+        }
+
         match save_manager.backup_server(server_id, world_name) {
             Ok(backup) => {
-                // Record in database
                 if let Ok(conn) = db.lock() {
                     let _ = conn.execute(
                         "INSERT INTO saves (id, name, file_path, file_size, source_server_id, created_at)
@@ -158,9 +190,10 @@ fn run_backup_cycle(
                 tracing::info!(
                     server = %server_name,
                     world = %world_name,
+                    interval_minutes = effective_policy.interval_minutes,
                     "Auto-backup: world backed up"
                 );
-                sync_backup_to_oss(&backup_config.oss, &backup.file_path, &backup.name);
+                sync_backup_to_oss(&effective_policy.oss, &backup.file_path, &backup.name);
             }
             Err(e) => {
                 tracing::warn!(
@@ -168,38 +201,36 @@ fn run_backup_cycle(
                     error = %e,
                     "Auto-backup: world backup failed (may not exist yet)"
                 );
+                continue;
             }
         }
 
-        // 2) Backup SSC database (tshock.sqlite) if it exists
-        let tshock_db_path = data_dir
-            .join("servers")
-            .join(server_id)
-            .join("tshock")
-            .join("tshock.sqlite");
+        if effective_policy.backup_ssc {
+            let tshock_db_path = data_dir
+                .join("servers")
+                .join(server_id)
+                .join("tshock")
+                .join("tshock.sqlite");
 
-        if tshock_db_path.exists() {
-            if let Err(e) = backup_ssc_database(&tshock_db_path, data_dir, server_id, backup_config) {
-                tracing::warn!(
-                    server = %server_name,
-                    error = %e,
-                    "Auto-backup: SSC database backup failed"
-                );
-            } else {
-                tracing::info!(
-                    server = %server_name,
-                    "Auto-backup: SSC database backed up"
-                );
+            if tshock_db_path.exists() {
+                if let Err(e) =
+                    backup_ssc_database(&tshock_db_path, data_dir, server_id, &effective_policy)
+                {
+                    tracing::warn!(
+                        server = %server_name,
+                        error = %e,
+                        "Auto-backup: SSC database backup failed"
+                    );
+                } else {
+                    tracing::info!(
+                        server = %server_name,
+                        "Auto-backup: SSC database backed up"
+                    );
+                }
             }
         }
 
-        // 3) Prune old local backups by age and count.
-        if backup_config.local_retention_days > 0 {
-            prune_backups_older_than(db, server_id, backup_config.local_retention_days);
-        }
-        if backup_config.max_backups_per_server > 0 && !backup_config.archive_daily_enabled {
-            prune_old_backups(db, server_id, backup_config.max_backups_per_server);
-        }
+        apply_backup_retention(db, server_id, &effective_policy);
     }
 
     Ok(())
@@ -222,7 +253,9 @@ fn duration_until_next_archive(hour: u8) -> Duration {
         next = local_datetime_at(today + chrono::Duration::days(1), hour);
     }
 
-    (next - now).to_std().unwrap_or_else(|_| Duration::from_secs(60))
+    (next - now)
+        .to_std()
+        .unwrap_or_else(|_| Duration::from_secs(60))
 }
 
 fn local_datetime_at(date: NaiveDate, hour: u32) -> DateTime<Local> {
@@ -251,8 +284,7 @@ fn archive_world_backups_for_date(
     }
 
     let archive_dir = data_dir.join("saves").join("archives");
-    std::fs::create_dir_all(&archive_dir)
-        .map_err(|e| format!("Create archive dir: {}", e))?;
+    std::fs::create_dir_all(&archive_dir).map_err(|e| format!("Create archive dir: {}", e))?;
 
     for (server_id, items) in backups {
         if items.is_empty() {
@@ -373,7 +405,55 @@ fn collect_world_backups_for_date(
 }
 
 fn is_world_backup_name(name: &str) -> bool {
-    name.ends_with(".wld") || name.ends_with(".wld.bak") || name.ends_with(".bak")
+    (name.ends_with(".wld") || name.ends_with(".wld.bak") || name.ends_with(".bak"))
+        && !name.ends_with(".zip")
+}
+
+fn should_run_backup_now(
+    db: &DbPool,
+    server_id: &str,
+    interval_minutes: u64,
+) -> Result<bool, String> {
+    if interval_minutes == 0 {
+        return Ok(true);
+    }
+
+    let conn = db.lock().map_err(|e| format!("DB lock: {}", e))?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT name, created_at FROM saves WHERE source_server_id = ?1 ORDER BY created_at DESC",
+        )
+        .map_err(|e| format!("Query latest backups: {}", e))?;
+
+    let rows = stmt
+        .query_map(params![server_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| format!("Map latest backups: {}", e))?;
+
+    for row in rows.filter_map(Result::ok) {
+        let (name, created_at) = row;
+        if !is_world_backup_name(&name) {
+            continue;
+        }
+
+        let Some(last_backup) = parse_save_created_at(&created_at) else {
+            continue;
+        };
+
+        return Ok(Utc::now() - last_backup >= chrono::Duration::minutes(interval_minutes as i64));
+    }
+
+    Ok(true)
+}
+
+pub fn apply_backup_retention(db: &DbPool, server_id: &str, backup_policy: &EffectiveBackupPolicy) {
+    if backup_policy.local_retention_days > 0 {
+        prune_backups_older_than(db, server_id, backup_policy.local_retention_days);
+    }
+    if backup_policy.max_backups_per_server > 0 && !backup_policy.archive_daily_enabled {
+        prune_old_backups(db, server_id, backup_policy.max_backups_per_server);
+    }
 }
 
 fn remove_existing_archive_record(
@@ -398,8 +478,7 @@ fn remove_existing_archive_record(
 }
 
 fn write_backup_archive(archive_path: &Path, items: &[BackupArchiveItem]) -> Result<(), String> {
-    let file = File::create(archive_path)
-        .map_err(|e| format!("Create archive file: {}", e))?;
+    let file = File::create(archive_path).map_err(|e| format!("Create archive file: {}", e))?;
     let mut zip = ZipWriter::new(file);
     let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
 
@@ -413,12 +492,10 @@ fn write_backup_archive(archive_path: &Path, items: &[BackupArchiveItem]) -> Res
 
         zip.start_file(entry_name, options)
             .map_err(|e| format!("Start archive entry: {}", e))?;
-        io::copy(&mut input, &mut zip)
-            .map_err(|e| format!("Write archive entry: {}", e))?;
+        io::copy(&mut input, &mut zip).map_err(|e| format!("Write archive entry: {}", e))?;
     }
 
-    zip.finish()
-        .map_err(|e| format!("Finish archive: {}", e))?;
+    zip.finish().map_err(|e| format!("Finish archive: {}", e))?;
 
     Ok(())
 }
@@ -428,11 +505,10 @@ fn backup_ssc_database(
     tshock_db_path: &Path,
     data_dir: &Path,
     server_id: &str,
-    backup_config: &BackupConfig,
+    backup_config: &EffectiveBackupPolicy,
 ) -> Result<PathBuf, String> {
     let backup_dir = data_dir.join("saves").join("ssc_backups");
-    std::fs::create_dir_all(&backup_dir)
-        .map_err(|e| format!("Create SSC backup dir: {}", e))?;
+    std::fs::create_dir_all(&backup_dir).map_err(|e| format!("Create SSC backup dir: {}", e))?;
 
     let timestamp = Local::now().format("%Y%m%d_%H%M%S");
     let backup_name = format!("{}_{}_tshock.sqlite", server_id, timestamp);
@@ -456,7 +532,11 @@ fn backup_ssc_database(
         "SSC database backed up"
     );
 
-    sync_backup_to_oss(&backup_config.oss, &backup_path.to_string_lossy(), &backup_name);
+    sync_backup_to_oss(
+        &backup_config.oss,
+        &backup_path.to_string_lossy(),
+        &backup_name,
+    );
 
     // Prune old SSC backups for this server (keep last 10)
     prune_ssc_backups(&backup_dir, server_id, 10);
@@ -525,7 +605,14 @@ fn sync_backup_to_nas(
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Create NAS backup directory: {}", e))?;
     }
-    std::fs::copy(source, &destination)
+    // Use explicit open+create+io::copy instead of std::fs::copy.
+    // std::fs::copy on Linux tries copy_file_range first; NFS returns EPERM for it
+    // (not ENOSYS/EXDEV which are the only errors Rust falls back on), causing a silent 0-byte file.
+    let mut src = std::fs::File::open(source)
+        .map_err(|e| format!("Open source backup: {}", e))?;
+    let mut dst = std::fs::File::create(&destination)
+        .map_err(|e| format!("Create NAS destination: {}", e))?;
+    std::io::copy(&mut src, &mut dst)
         .map_err(|e| format!("Copy backup to NAS: {}", e))?;
 
     Ok(destination.display().to_string())
@@ -540,10 +627,16 @@ fn sync_backup_to_tencent_cos(
         return Err("backup.oss.bucket is required for provider=tencent_cos".to_string());
     }
     if config.region.trim().is_empty() && config.endpoint.trim().is_empty() {
-        return Err("backup.oss.region or backup.oss.endpoint is required for provider=tencent_cos".to_string());
+        return Err(
+            "backup.oss.region or backup.oss.endpoint is required for provider=tencent_cos"
+                .to_string(),
+        );
     }
     if config.access_key_id.trim().is_empty() || config.access_key_secret.trim().is_empty() {
-        return Err("backup.oss.access_key_id/access_key_secret are required for provider=tencent_cos".to_string());
+        return Err(
+            "backup.oss.access_key_id/access_key_secret are required for provider=tencent_cos"
+                .to_string(),
+        );
     }
 
     let source = Path::new(file_path);
@@ -660,8 +753,8 @@ fn sha1_hex(data: &[u8]) -> String {
 }
 
 fn hmac_sha1(key: &[u8], data: &[u8]) -> Result<Vec<u8>, String> {
-    let mut mac = HmacSha1::new_from_slice(key)
-        .map_err(|e| format!("Create HMAC-SHA1 key: {}", e))?;
+    let mut mac =
+        HmacSha1::new_from_slice(key).map_err(|e| format!("Create HMAC-SHA1 key: {}", e))?;
     mac.update(data);
     Ok(mac.finalize().into_bytes().to_vec())
 }
@@ -761,9 +854,9 @@ pub fn prune_backups_older_than(db: &DbPool, server_id: &str, retention_days: u6
     };
 
     let cutoff = Utc::now() - chrono::Duration::days(retention_days as i64);
-    let mut stmt = match conn.prepare(
-        "SELECT id, file_path, created_at FROM saves WHERE source_server_id = ?1",
-    ) {
+    let mut stmt = match conn
+        .prepare("SELECT id, file_path, created_at FROM saves WHERE source_server_id = ?1")
+    {
         Ok(s) => s,
         Err(_) => return,
     };

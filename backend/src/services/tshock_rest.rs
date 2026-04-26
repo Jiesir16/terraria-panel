@@ -5,7 +5,6 @@
 //! to a specific server instance.
 
 use reqwest::Client;
-use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::path::Path;
 use std::time::Duration;
@@ -16,14 +15,8 @@ use crate::error::AppError;
 // ─── REST Token Management ───
 
 /// Resolve the REST API base URL and application token for a given server.
-pub fn resolve_rest_info(
-    data_dir: &Path,
-    server_id: &str,
-) -> Result<(String, String), AppError> {
-    let config_dir = data_dir
-        .join("servers")
-        .join(server_id)
-        .join("tshock");
+pub fn resolve_rest_info(data_dir: &Path, server_id: &str) -> Result<(String, String), AppError> {
+    let config_dir = data_dir.join("servers").join(server_id).join("tshock");
     let config_path = config_dir.join("config.json");
 
     if !config_path.exists() {
@@ -106,7 +99,9 @@ fn settings_obj_mut(config: &mut Value) -> Result<&mut Map<String, Value>, AppEr
         return config
             .get_mut("Settings")
             .and_then(|v| v.as_object_mut())
-            .ok_or_else(|| AppError::BadRequest("Invalid config.json Settings object".to_string()));
+            .ok_or_else(|| {
+                AppError::BadRequest("Invalid config.json Settings object".to_string())
+            });
     }
 
     config
@@ -127,7 +122,9 @@ fn tokens_obj_mut(settings: &mut Map<String, Value>) -> &mut Map<String, Value> 
     if !tokens.is_object() {
         *tokens = Value::Object(Map::new());
     }
-    tokens.as_object_mut().expect("tokens object just initialized")
+    tokens
+        .as_object_mut()
+        .expect("tokens object just initialized")
 }
 
 fn cached_token(token_file: &Path) -> Result<Option<String>, AppError> {
@@ -201,7 +198,10 @@ fn fix_legacy_token_format(
         .filter(|group| !group.trim().is_empty())
         .unwrap_or("superadmin")
         .to_string();
-    tokens.insert(token_key.to_string(), token_permission_object_for_group(&group));
+    tokens.insert(
+        token_key.to_string(),
+        token_permission_object_for_group(&group),
+    );
     write_config_json(config_path, config)
 }
 
@@ -303,11 +303,11 @@ fn provision_token_in_config(config_path: &Path, config: &mut Value) -> Result<S
 
 /// Check whether the REST API is set up and functional. Returns `(ready, message)`.
 /// If not ready, auto-provisions a token and returns `needs_restart = true`.
-pub fn ensure_rest_setup(data_dir: &Path, server_id: &str) -> Result<(bool, String, String), AppError> {
-    let config_dir = data_dir
-        .join("servers")
-        .join(server_id)
-        .join("tshock");
+pub fn ensure_rest_setup(
+    data_dir: &Path,
+    server_id: &str,
+) -> Result<(bool, String, String), AppError> {
+    let config_dir = data_dir.join("servers").join(server_id).join("tshock");
     let config_path = config_dir.join("config.json");
 
     if !config_path.exists() {
@@ -354,13 +354,6 @@ pub struct TShockRestClient {
     token: String,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct RestResponse {
-    pub status: String,
-    #[serde(flatten)]
-    pub data: Value,
-}
-
 impl TShockRestClient {
     pub fn new(base_url: String, token: String) -> Self {
         let client = Client::builder()
@@ -392,9 +385,7 @@ impl TShockRestClient {
             .query(&query)
             .send()
             .await
-            .map_err(|e| {
-                AppError::ProcessError(format!("TShock REST request failed: {}", e))
-            })?;
+            .map_err(|e| AppError::ProcessError(format!("TShock REST request failed: {}", e)))?;
 
         let status = resp.status();
         let body: Value = resp.json().await.map_err(|e| {
@@ -428,9 +419,7 @@ impl TShockRestClient {
             .query(&query)
             .send()
             .await
-            .map_err(|e| {
-                AppError::ProcessError(format!("TShock REST request failed: {}", e))
-            })?;
+            .map_err(|e| AppError::ProcessError(format!("TShock REST request failed: {}", e)))?;
 
         let status = resp.status();
         let body: Value = resp.json().await.map_err(|e| {
@@ -455,8 +444,11 @@ impl TShockRestClient {
     // ─── Server ───
 
     pub async fn server_status(&self) -> Result<Value, AppError> {
-        self.get("/v2/server/status", &[("players", "true"), ("rules", "true")])
-            .await
+        self.get(
+            "/v2/server/status",
+            &[("players", "true"), ("rules", "true")],
+        )
+        .await
     }
 
     pub async fn token_test(&self) -> Result<Value, AppError> {
@@ -479,11 +471,7 @@ impl TShockRestClient {
         self.post("/v3/server/rawcmd", &[("cmd", cmd)]).await
     }
 
-    pub async fn server_off(
-        &self,
-        message: Option<&str>,
-        nosave: bool,
-    ) -> Result<Value, AppError> {
+    pub async fn server_off(&self, message: Option<&str>, nosave: bool) -> Result<Value, AppError> {
         let nosave_str = nosave.to_string();
         let mut params: Vec<(&str, &str)> = vec![("confirm", "true"), ("nosave", &nosave_str)];
         if let Some(msg) = message {
@@ -507,7 +495,8 @@ impl TShockRestClient {
     }
 
     pub async fn player_read(&self, player: &str) -> Result<Value, AppError> {
-        self.get("/v4/players/read", &[("player", player)]).await
+        // v2 includes the player's active buffs; v4 omits them on current TShock builds.
+        self.get("/v2/players/read", &[("player", player)]).await
     }
 
     pub async fn player_kick(&self, player: &str, reason: Option<&str>) -> Result<Value, AppError> {
@@ -535,8 +524,7 @@ impl TShockRestClient {
     }
 
     pub async fn player_unmute(&self, player: &str) -> Result<Value, AppError> {
-        self.post("/v2/players/unmute", &[("player", player)])
-            .await
+        self.post("/v2/players/unmute", &[("player", player)]).await
     }
 
     // ─── Users ───

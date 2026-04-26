@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { serverApi, ServerStatus, ServerDetailResponse, CreateServerRequest, UpdateServerRequest, ServerConfig } from '../api/server'
+import { serverApi, ServerStatus, ServerDetailResponse, CreateServerRequest, UpdateServerRequest, ServerConfig, DeleteServerBackupMode } from '../api/server'
 
 export const useServersStore = defineStore('servers', () => {
   const servers = ref<ServerStatus[]>([])
@@ -73,12 +73,13 @@ export const useServersStore = defineStore('servers', () => {
     return server
   }
 
-  async function deleteServer(id: string) {
-    await serverApi.delete(id)
+  async function deleteServer(id: string, backupMode: DeleteServerBackupMode = 'keep') {
+    const response = await serverApi.delete(id, backupMode)
     servers.value = servers.value.filter(s => s.id !== id)
     if (currentServer.value?.id === id) {
       currentServer.value = null
     }
+    return response.data
   }
 
   async function startServer(id: string) {
@@ -116,7 +117,8 @@ export const useServersStore = defineStore('servers', () => {
       ...detail.server,
       status: statusResponse.data.status,
       player_count: detail.player_count ?? 0,
-      uptime_seconds: detail.uptime_seconds ?? 0
+      uptime_seconds: detail.uptime_seconds ?? 0,
+      frp: statusResponse.data.frp
     }
 
     currentServer.value = flat

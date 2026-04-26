@@ -1,9 +1,10 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     Json,
 };
 use chrono::Utc;
 use rusqlite::{params, Connection};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -16,7 +17,10 @@ use crate::{
         CommandRequest, CreateServerRequest, Server, ServerConfig, ServerDetail, SscConfig,
         TShockGroupSummary, TShockSecurityOverview, TShockUserAccount, UpdateServerRequest,
     },
-    services::tshock_rest::TShockRestClient,
+    services::{
+        frp_config::write_server_frp_config, frp_settings::load_global_frp_settings,
+        tshock_rest::TShockRestClient,
+    },
 };
 
 #[cfg(target_os = "linux")]
@@ -66,6 +70,83 @@ async fn is_server_port_ready(port: u16) -> bool {
     }
 }
 
+fn frp_process_key(server_id: &str) -> String {
+    format!("server:{}", server_id)
+}
+
+async fn sync_server_frp_tunnel(
+    state: &AppState,
+    server_id: &str,
+    panel_config: Option<&ServerConfig>,
+    local_port: u16,
+) -> Result<(), AppError> {
+    let settings =
+        load_global_frp_settings(&state.config.server.data_dir, state.config.server.port)
+            .map_err(AppError::FileError)?;
+    let key = frp_process_key(server_id);
+
+    let Some(frp) = panel_config.and_then(|config| config.frp.as_ref()) else {
+        let _ = state.frp_manager.stop_tunnel(&key).await;
+        return Ok(());
+    };
+
+    if !settings.enabled || !frp.enabled.unwrap_or(false) {
+        let _ = state.frp_manager.stop_tunnel(&key).await;
+        return Ok(());
+    }
+
+    let remote_port = frp
+        .remote_port
+        .ok_or_else(|| AppError::BadRequest("FRP 已启用，但未配置远端端口".to_string()))?;
+    let proxy_name = frp
+        .proxy_name
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("terraria-{}", server_id));
+
+    let config_path = write_server_frp_config(
+        &state.config.server.data_dir,
+        &settings,
+        server_id,
+        &proxy_name,
+        local_port,
+        remote_port,
+    )
+    .map_err(AppError::FileError)?;
+
+    let config_path_str = config_path.to_string_lossy();
+
+    // Try to recover existing process first
+    state
+        .frp_manager
+        .recover_from_config(&key, &config_path_str, Some(remote_port))
+        .await?;
+
+    // Check if already running
+    let status = state.frp_manager.status(&key).await;
+    if !status.running {
+        // Start new tunnel if not running
+        state
+            .frp_manager
+            .start_tunnel(
+                &key,
+                &settings.frpc_bin,
+                &config_path_str,
+                Some(remote_port),
+            )
+            .await?;
+    }
+
+    Ok(())
+}
+
+async fn stop_server_frp_tunnel(state: &AppState, server_id: &str) {
+    let _ = state
+        .frp_manager
+        .stop_tunnel(&frp_process_key(server_id))
+        .await;
+}
+
 async fn wait_for_server_ready(
     state: &AppState,
     server_id: &str,
@@ -91,6 +172,11 @@ async fn wait_for_server_ready(
 
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteServerQuery {
+    backup_mode: Option<String>,
 }
 
 fn split_tshock_commands(commands: &str) -> Vec<String> {
@@ -170,7 +256,10 @@ fn rest_group_names(value: &Value) -> Vec<String> {
 fn find_value_case_insensitive<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {
     let obj = value.as_object()?;
     for (key, child) in obj {
-        if keys.iter().any(|expected| key.eq_ignore_ascii_case(expected)) {
+        if keys
+            .iter()
+            .any(|expected| key.eq_ignore_ascii_case(expected))
+        {
             return Some(child);
         }
     }
@@ -285,7 +374,11 @@ async fn load_rest_group_summaries(
         });
     }
 
-    groups.sort_by(|a, b| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase()));
+    groups.sort_by(|a, b| {
+        a.name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase())
+    });
     Ok(groups)
 }
 
@@ -774,9 +867,11 @@ fn load_tshock_security_overview(
                 ))
             })
             .map_err(|e| AppError::DatabaseError(format!("Failed to read Groups rows: {}", e)))?;
-        group_parents = rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
-            AppError::DatabaseError(format!("Failed to collect Groups rows: {}", e))
-        })?.into_iter().collect();
+        group_parents = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to collect Groups rows: {}", e)))?
+            .into_iter()
+            .collect();
     }
 
     if table_names.contains("Groups") && sqlite_table_has_column(&conn, "Groups", "Commands") {
@@ -1193,6 +1288,7 @@ pub async fn delete_server(
     State(state): State<AppState>,
     auth: Auth,
     Path(id): Path<String>,
+    Query(query): Query<DeleteServerQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     tracing::info!(user = %auth.username, server_id = %id, "Deleting server");
 
@@ -1203,12 +1299,51 @@ pub async fn delete_server(
         ));
     }
 
+    let backup_mode = query.backup_mode.as_deref().unwrap_or("keep");
+    if backup_mode != "keep" && backup_mode != "delete" {
+        return Err(AppError::BadRequest(
+            "backup_mode 只能是 keep 或 delete".to_string(),
+        ));
+    }
+
     let db = state.db.lock().map_err(|_| {
         AppError::InternalServerError("Failed to acquire database lock".to_string())
     })?;
 
-    db.execute("DELETE FROM servers WHERE id = ?1", params![id])
+    let backup_files = if backup_mode == "delete" {
+        let mut stmt = db
+            .prepare("SELECT file_path FROM saves WHERE source_server_id = ?1")
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![id.as_str()], |row| row.get::<_, String>(0))
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?
+    } else {
+        Vec::new()
+    };
+
+    if backup_mode == "delete" {
+        db.execute("DELETE FROM saves WHERE source_server_id = ?1", params![id.as_str()])
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+    } else {
+        db.execute(
+            "UPDATE saves SET source_server_id = NULL WHERE source_server_id = ?1",
+            params![id.as_str()],
+        )
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+    }
+
+    db.execute("DELETE FROM servers WHERE id = ?1", params![id.as_str()])
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+    drop(db);
+
+    for file_path in &backup_files {
+        if std::path::Path::new(file_path).exists() {
+            std::fs::remove_file(file_path).map_err(|e| AppError::FileError(e.to_string()))?;
+        }
+    }
 
     // Delete server directory
     let server_dir = state.config.server.data_dir.join("servers").join(&id);
@@ -1217,15 +1352,25 @@ pub async fn delete_server(
         std::fs::remove_dir_all(server_dir).map_err(|e| AppError::FileError(e.to_string()))?;
     }
 
-    tracing::info!(user = %auth.username, server_id = %id, "Server deleted successfully");
+    tracing::info!(user = %auth.username, server_id = %id, backup_mode = backup_mode, "Server deleted successfully");
 
-    // Log after db lock is released
-    drop(db);
-    crate::db::log_operation(&state.db, &auth.user_id, "删除服务器", Some(&id), None);
+    crate::db::log_operation(
+        &state.db,
+        &auth.user_id,
+        "删除服务器",
+        Some(&id),
+        Some(&format!("backup_mode={}", backup_mode)),
+    );
 
     Ok(Json(json!({
         "success": true,
-        "message": "Server deleted successfully"
+        "message": if backup_mode == "delete" {
+            "Server and related backups deleted successfully"
+        } else {
+            "Server deleted successfully, backups preserved"
+        },
+        "backup_mode": backup_mode,
+        "deleted_backup_count": backup_files.len()
     })))
 }
 
@@ -1357,7 +1502,9 @@ pub async fn start_server(
     sync_ssc_runtime_config(&config_path, panel_config.as_ref())?;
 
     // Auto-provision REST API token before the process boots, ensuring it's loaded instantly.
-    if let Err(e) = crate::services::tshock_rest::ensure_rest_setup(&state.config.server.data_dir, &id) {
+    if let Err(e) =
+        crate::services::tshock_rest::ensure_rest_setup(&state.config.server.data_dir, &id)
+    {
         tracing::warn!(server_id = %id, error = %e, "Failed to pre-provision REST API token before startup");
     }
 
@@ -1373,7 +1520,8 @@ pub async fn start_server(
     });
 
     // Read TShock config for autocreate settings (world size)
-    let (autocreate, world_name_for_create, difficulty, seed, world_evil) = if world_path.is_none() {
+    let (autocreate, world_name_for_create, difficulty, seed, world_evil) = if world_path.is_none()
+    {
         if let Some(panel_config) = panel_config.as_ref() {
             let auto = panel_config.auto_create.unwrap_or(false);
             let size = map_world_width_to_autocreate(panel_config.world_width.map(|v| v as u64));
@@ -1475,6 +1623,12 @@ pub async fn start_server(
 
     let ready = wait_for_server_ready(&state, &id, effective_port, 30).await?;
 
+    if let Err(error) =
+        sync_server_frp_tunnel(&state, &id, panel_config.as_ref(), effective_port).await
+    {
+        tracing::warn!(server_id = %id, error = %error, "Failed to start FRP tunnel for server");
+    }
+
     // Update database status — block ensures MutexGuard doesn't leak
     {
         let db = state.db.lock().map_err(|_| {
@@ -1536,6 +1690,7 @@ pub async fn stop_server(
         ));
     }
 
+    stop_server_frp_tunnel(&state, &id).await;
     state.process_manager.stop_server(&id).await?;
 
     // Update database status — block ensures MutexGuard doesn't leak
@@ -1575,6 +1730,7 @@ pub async fn kill_server(
         ));
     }
 
+    stop_server_frp_tunnel(&state, &id).await;
     state.process_manager.kill_server(&id).await?;
 
     {
@@ -1630,7 +1786,9 @@ pub async fn send_command(
             |row| row.get::<_, Option<String>>(0),
         )
         .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => AppError::NotFound("Server not found".to_string()),
+            rusqlite::Error::QueryReturnedNoRows => {
+                AppError::NotFound("Server not found".to_string())
+            }
             _ => AppError::DatabaseError(e.to_string()),
         })?
     };
@@ -1677,7 +1835,9 @@ pub async fn server_status(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => AppError::NotFound("Server not found".to_string()),
+            rusqlite::Error::QueryReturnedNoRows => {
+                AppError::NotFound("Server not found".to_string())
+            }
             _ => AppError::DatabaseError(e.to_string()),
         })?
     };
@@ -1696,11 +1856,77 @@ pub async fn server_status(
         "stopped"
     };
 
+    let frp_key = frp_process_key(&id);
+    let frp_status = state.frp_manager.status(&frp_key).await;
+
     Ok(Json(json!({
         "status": status,
         "running": port_ready,
         "process_running": process_running,
-        "db_status": db_status
+        "db_status": db_status,
+        "frp": {
+            "running": frp_status.running,
+            "remote_port": frp_status.remote_port,
+            "last_error": frp_status.last_error
+        }
+    })))
+}
+
+pub async fn frp_status(
+    State(state): State<AppState>,
+    _auth: Auth,
+    Path(id): Path<String>,
+) -> Result<Json<crate::services::frp_manager::FrpRuntimeStatus>, AppError> {
+    Ok(Json(state.frp_manager.status(&frp_process_key(&id)).await))
+}
+
+pub async fn restart_frp(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !auth.is_operator_or_admin() {
+        return Err(AppError::Forbidden(
+            "Only operators and admins can restart FRP tunnels".to_string(),
+        ));
+    }
+
+    let config_path = state
+        .config
+        .server
+        .data_dir
+        .join("servers")
+        .join(&id)
+        .join("tshock")
+        .join("panel-config.json");
+    if !config_path.exists() {
+        return Err(AppError::NotFound("Server config not found".to_string()));
+    }
+
+    let config_str = std::fs::read_to_string(&config_path)
+        .map_err(|e| AppError::FileError(format!("Failed to read panel-config.json: {}", e)))?;
+    let panel_config = serde_json::from_str::<ServerConfig>(&config_str)
+        .map_err(|e| AppError::BadRequest(format!("Invalid panel-config.json: {}", e)))?;
+
+    let local_port = panel_config
+        .port
+        .or_else(|| {
+            state.db.lock().ok().and_then(|db| {
+                db.query_row(
+                    "SELECT port FROM servers WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .ok()
+            })
+        })
+        .ok_or_else(|| AppError::NotFound("Server port not found".to_string()))?;
+
+    sync_server_frp_tunnel(&state, &id, Some(&panel_config), local_port).await?;
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "Server FRP restarted"
     })))
 }
 
